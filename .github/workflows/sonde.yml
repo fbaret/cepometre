@@ -1,0 +1,18 @@
+name: Sonde forêts publiques
+on: workflow_dispatch
+jobs:
+  sonde:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          set +e
+          curl -sS -m 60 "https://data.geopf.fr/wfs/ows?SERVICE=WFS&VERSION=2.0.0&REQUEST=GetCapabilities" -o geo.xml
+          echo "::notice title=geopf::$(grep -oi '<Name>[^<]*\(publi\|onf\|foret\|forest\)[^<]*</Name>' geo.xml | tr '\n' ' ' | head -c 3000)"
+          curl -sS -m 60 "http://ws.carmencarto.fr/WFS/105/ONF_Forets?SERVICE=WFS&VERSION=1.1.0&REQUEST=GetCapabilities" -o car.xml; echo "carmen rc=$?"
+          echo "::notice title=carmen::$(wc -c < car.xml) o $(grep -o '<Name>[^<]*</Name>' car.xml | tr '\n' ' ' | head -c 1500)"
+          curl -sS -m 90 "http://ws.carmencarto.fr/WFS/105/ONF_Forets?SERVICE=WFS&VERSION=1.1.0&REQUEST=GetFeature&TYPENAME=ms:FOR_PUBL_FR&MAXFEATURES=2&BBOX=42.9,-1.2,43.1,-1.0,EPSG:4326" -o f.xml
+          echo "::notice title=carmen-feat::$(head -c 2500 f.xml | tr '\n' ' ')"
+          for L in FORETS.PUBLIQUES:forets_publiques FORETS.PUBLIQUES; do
+            curl -sS -m 60 "https://data.geopf.fr/wfs/ows?SERVICE=WFS&VERSION=2.0.0&REQUEST=GetFeature&TYPENAMES=$L&COUNT=2&OUTPUTFORMAT=application/json&BBOX=42.9,-1.2,43.1,-1.0,EPSG:4326" -o g.json
+            echo "::notice title=geopf-$L::$(head -c 2000 g.json | tr '\n' ' ')"
+          done
