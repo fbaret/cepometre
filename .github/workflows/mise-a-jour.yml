@@ -6,6 +6,10 @@ on:
   schedule:
     - cron: "40 4 * * *"
     - cron: "40 16 * * *"
+    # Rattrapages : GitHub saute parfois des passages planifiés. Ignorés si la météo a moins de 5 h.
+    - cron: "17 6 * * *"
+    - cron: "17 18 * * *"
+    - cron: "17 21 * * *"
   workflow_dispatch:
   push:
     branches: [main]
@@ -41,7 +45,14 @@ jobs:
           PREV_URL: https://vestra.fr/cepometre/data/wx-raw.json
         run: |
           mkdir -p site/data
-          if [ "${{ github.event_name }}" = "push" ] && curl -fsSL "$SITE/wx-raw.json" -o site/data/wx-raw.json; then
+          FRESH=0
+          if [ "${{ github.event_name }}" = "schedule" ] && curl -fsSL "$SITE/wx-raw.json" -o /tmp/prev.json; then
+            AGE=$(node -e 'const d=require("/tmp/prev.json");console.log(Math.round((Date.now()-Date.parse(d.generated))/36e5))')
+            echo "Météo publiée il y a $AGE h"; [ "$AGE" -lt 5 ] && FRESH=1
+          fi
+          if [ "$FRESH" = 1 ]; then
+            echo "Passage de rattrapage inutile : météo récente reprise."; cp /tmp/prev.json site/data/wx-raw.json
+          elif [ "${{ github.event_name }}" = "push" ] && curl -fsSL "$SITE/wx-raw.json" -o site/data/wx-raw.json; then
             echo "Modification du code : météo brute reprise du dernier passage."
           elif [ "${{ github.event_name }}" = "push" ] && curl -fsSL "$SITE/wx.json" -o site/data/wx-raw.json; then
             echo "Modification du code : pas encore de météo brute publiée, reprise de wx.json."
