@@ -23,6 +23,10 @@ Le dépôt est privé. La météo publiée (`data/wx.json`) est lisible par tous
 
 `scripts/statique.py` précalcule, une seule fois, une grille de 250 m sur le 64 et le 65 : essence dominante et part de forêt (BD Forêt V2 de l'IGN, 44 000 polygones), pente et exposition (altimétrie IGN). Le résultat (`data/static.json` + `static.bin.gz`, environ 600 Ko) est gardé dans le cache de GitHub et n'est recalculé que si le script change. La carte multiplie la météo par ces poids ; la case « Tenir compte des arbres et de l'exposition » permet de revenir à la météo seule.
 
+## Forêts publiques
+
+`scripts/publiques.py` récupère les forêts publiques de l'ONF (couche `ONF.FORETS_PUBLIQUES` de la Géoplateforme : domaniales, communales, sectionales, syndicales) et les pose sur la même grille de 250 m (`data/public.json` + `public.bin.gz`, cache séparé). Une case compte comme publique si au moins 40 % de sa surface l'est. La case « Forêts publiques uniquement », cochée par défaut, masque le reste de la carte, des secteurs et des pastilles des jours. La fiche d'un coin indique le nom de la forêt ou rappelle qu'en forêt privée il faut l'accord du propriétaire. Les arrêtés municipaux ou préfectoraux de cueillette ne sont dans aucune base : la couche dit « public », pas « autorisé ».
+
 ## Fiabilisation de la météo
 
 - `scripts/meteo.mjs` écarte les valeurs impossibles, bouche les trous de température d'un jour sur l'autre, et reprend du passage précédent les points qu'Open-Meteo n'a pas servis. Il publie le fichier brut `data/wx-raw.json`.
@@ -47,7 +51,8 @@ Seuls les passages planifiés (6 h 40 et 18 h 40) et les lancements manuels inte
 - `scripts/meteo.mjs` : récupération de la météo, grille adaptative.
 - `scripts/pluvio.mjs` : recalage sur les stations Météo-France.
 - `scripts/statique.py` : forêts, pente, exposition et altitude (grille 250 m).
+- `scripts/publiques.py` : forêts publiques de l'ONF sur la même grille.
 - `scripts/diagnostic.mjs` : bilan par altitude et points témoins (annotations GitHub).
 - `.github/workflows/mise-a-jour.yml` : la tâche planifiée.
 
-Données : Open-Meteo (CC-BY 4.0), Météo-France (données publiques, licence ouverte Etalab), IGN Géoplateforme (Plan IGN, photos aériennes, BD Forêt V2, altimétrie), OpenTopoMap.
+Données : Open-Meteo (CC-BY 4.0), Météo-France et ONF (licence ouverte Etalab), IGN Géoplateforme (Plan IGN, photos aériennes, BD Forêt V2, altimétrie), OpenTopoMap.

@@ -61,8 +61,15 @@ jobs:
           path: static-cache
           key: statique-v1-${{ hashFiles('scripts/statique.py') }}
 
+      # Forêts publiques (ONF) : même principe, cache séparé.
+      - uses: actions/cache@v4
+        id: publiques
+        with:
+          path: public-cache
+          key: publiques-v1-${{ hashFiles('scripts/publiques.py', 'scripts/statique.py') }}
+
       - uses: actions/setup-python@v5
-        if: steps.statique.outputs.cache-hit != 'true'
+        if: steps.statique.outputs.cache-hit != 'true' || steps.publiques.outputs.cache-hit != 'true'
         with:
           python-version: "3.12"
 
@@ -91,10 +98,22 @@ jobs:
         run: |
           if [ -f statique.log ]; then grep -v "^ *[0-9]* / " statique.log | tail -n 9 | while IFS= read -r l; do echo "::warning title=precalcul::${l:0:400}"; done; fi
 
+      - name: Précalculer les forêts publiques (ONF)
+        if: steps.publiques.outputs.cache-hit != 'true'
+        continue-on-error: true
+        timeout-minutes: 20
+        run: |
+          set -o pipefail
+          pip install -q numpy
+          python scripts/publiques.py public-cache 2>&1 | tee publiques.log
+          tail -n 3 publiques.log | while IFS= read -r l; do echo "::warning title=publiques::${l:0:400}"; done
+
       - name: Joindre forêts et relief au site
         run: |
           if [ -f static-cache/static.json ]; then cp static-cache/static.json static-cache/static.bin.gz site/data/ && cat static-cache/static.json | head -c 600; echo
           else echo "Grille forêts/relief absente : la carte restera en météo seule."; fi
+          if [ -f public-cache/public.json ]; then cp public-cache/public.json public-cache/public.bin.gz site/data/
+          else echo "Forêts publiques absentes : le filtre sera indisponible."; fi
 
       - name: Diagnostic (altitude, forêt, points témoins)
         if: github.event_name != 'schedule'
