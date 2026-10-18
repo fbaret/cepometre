@@ -87,6 +87,11 @@ jobs:
           if [ -f static-cache/static.json ]; then cp static-cache/static.json static-cache/static.bin.gz site/data/ && cat static-cache/static.json | head -c 600; echo
           else echo "Grille forêts/relief absente : la carte restera en météo seule."; fi
 
+      - name: Diagnostic (altitude, forêt, points témoins)
+        if: github.event_name != 'schedule'
+        continue-on-error: true
+        run: node scripts/diagnostic.mjs site/data
+
       - name: Vérifier le dossier de destination (protection de vestra.fr)
         env:
           DIR: ${{ secrets.OVH_FTP_DIR || './www/cepometre/' }}
