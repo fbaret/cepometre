@@ -222,12 +222,14 @@ button { cursor: pointer; }
 .chev { color: var(--muted); }
 
 /* Fiche d'un coin */
-.verdict { display: grid; grid-template-columns: auto 1fr; gap: 14px; align-items: center; }
+.verdict { display: grid; grid-template-columns: auto 1fr auto; gap: 14px; align-items: center; }
 .big {
   width: 84px; height: 84px; border-radius: 22px; display: grid; place-items: center; align-content: center;
   color: #fff8f0;
 }
 .big b { font: 34px/1 var(--font-display); }
+.commune { margin: 2px 0 0; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.share-btn { flex: none; display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 8px 10px; font-size: 11px; align-self: flex-start; }
 .big span { font: 11px/1 var(--font-mono); opacity: .85; margin-top: 4px; }
 .verdict h2 { font-size: 22px; }
 .facts { display: grid; gap: 0; margin: 0; }
@@ -1549,6 +1551,29 @@ button { cursor: pointer; }
       '<p class="small muted">Touche une espèce pour l\'afficher sur la carte. « Cèpes (tous) » est le modèle d\'origine ; le détail des cèpes et les autres espèces sont des estimations de départ, à caler avec ton carnet.</p></div>';
   }
 
+  // Commune du point touché (API Géo de l'État, gratuite, sans clé). Rien hors ligne.
+  var communeCache = new Map();
+  function loadCommune(sp) {
+    var key = sp.lat.toFixed(3) + "," + sp.lon.toFixed(3);
+    if (communeCache.has(key)) { sp.commune = communeCache.get(key); return; }
+    sp.commune = null;
+    fetchWithTimeout("https://geo.api.gouv.fr/communes?lat=" + sp.lat.toFixed(5) + "&lon=" + sp.lon.toFixed(5) + "&fields=nom,codeDepartement&format=json", 8000)
+      .then(function (r) { return r.ok ? r.json() : []; })
+      .then(function (a) {
+        var c = a && a[0] ? a[0].nom + (a[0].codeDepartement ? " (" + a[0].codeDepartement + ")" : "") : null;
+        communeCache.set(key, c);
+        if (state.spot === sp) { sp.commune = c; if (c) renderSpot(); }
+      }).catch(function () {});
+  }
+  function shareSpot(sp, score) {
+    var la = sp.lat.toFixed(5), lo = sp.lon.toFixed(5);
+    var url = "https://www.google.com/maps/search/?api=1&query=" + la + "," + lo;
+    var text = (sp.commune ? sp.commune + " · " : "") + la + ", " + lo;
+    if (navigator.share) { navigator.share({ title: "Coin à champignons", text: text, url: url }).catch(function () {}); return; }
+    var done = function () { var b = $("#shareSpot"); if (b) b.querySelector("span").textContent = "Copié !"; };
+    if (navigator.clipboard) navigator.clipboard.writeText(text + "\n" + url).then(done, function () { window.open(url, "_blank"); });
+    else window.open(url, "_blank");
+  }
   function renderSpot() {
     var pane = $("#pane-spot"), sp = state.spot;
     if (!sp) {
@@ -1605,7 +1630,8 @@ button { cursor: pointer; }
 
     pane.innerHTML = head +
       '<div class="verdict"><div class="big" style="' + pillStyle(score) + '"><b>' + score + '</b><span>/100</span></div>' +
-      '<div><h2>' + verdict(score) + '</h2><p class="muted small">' + (state.sel === TODAY ? "Aujourd'hui" : fmtDay(state.sel, true)) + (state.sel > TODAY ? " · prévision" : "") + (state.species !== "cepes" ? " · " + esc(SP().label) : "") + (ess.w === null ? " · sans l'essence" : " · " + esc(ess.label.toLowerCase())) + (sp.topo && sp.topo.slope >= 3 ? " · versant " + M.aspectLabel(sp.topo.aspect) : "") + "</p></div></div>" +
+      '<div style="min-width:0"><h2>' + verdict(score) + '</h2>' + (sp.commune ? '<p class="commune"><b>' + esc(sp.commune) + "</b></p>" : "") + '<p class="muted small">' + (state.sel === TODAY ? "Aujourd'hui" : fmtDay(state.sel, true)) + (state.sel > TODAY ? " · prévision" : "") + (state.species !== "cepes" ? " · " + esc(SP().label) : "") + (ess.w === null ? " · sans l'essence" : " · " + esc(ess.label.toLowerCase())) + (sp.topo && sp.topo.slope >= 3 ? " · versant " + M.aspectLabel(sp.topo.aspect) : "") + "</p></div>" +
+      '<button type="button" class="btn share-btn" id="shareSpot" aria-label="Partager la position"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M18 16a3 3 0 0 0-2.4 1.2l-6.7-3.4a3 3 0 0 0 0-1.6l6.7-3.4A3 3 0 1 0 15 7l-6.7 3.4a3 3 0 1 0 0 3.2L15 17a3 3 0 1 0 3-1z"/></svg><span>Partager</span></button></div>' +
       '<div class="ess"><label class="label" for="essSel">Essence</label><select id="essSel">' + essOpts + "</select></div>" +
       '<p class="small muted">' + essLine + "</p>" +
       '<div class="facts">' + facts.map(function (f) { return '<div class="fact"><span class="ic">' + f[0] + "</span><p>" + f[1] + "</p></div>"; }).join("") + "</div>" +
@@ -1616,6 +1642,8 @@ button { cursor: pointer; }
       '<div class="links"><a href="https://www.geoportail.gouv.fr/carte?c=' + sp.lon + "," + sp.lat + '&z=15&l0=GEOGRAPHICALGRIDSYSTEMS.PLANIGNV2::GEOPORTAIL:OGC:WMTS(1)&l1=LANDCOVER.FORESTINVENTORY.V2::GEOPORTAIL:OGC:WMTS(0.7)&permalink=yes" target="_blank" rel="noopener">Voir sur Géoportail</a>' +
       '<a href="https://www.google.com/maps/dir/?api=1&destination=' + sp.lat + "," + sp.lon + '" target="_blank" rel="noopener">Itinéraire</a></div>';
 
+    $("#shareSpot").onclick = function () { shareSpot(sp, score); };
+    if (sp.commune === undefined) loadCommune(sp);
     $("#essSel").onchange = function (e) { sp.essence = e.target.value; sp.manual = true; sp.essenceSource = null; renderSpot(); };
     $("#addFound").onclick = function () { openForm({ lat: sp.lat, lon: sp.lon, found: true, essence: sp.essence, species: state.species }); };
     $("#addNone").onclick = function () { openForm({ lat: sp.lat, lon: sp.lon, found: false, essence: sp.essence, species: state.species }); };
