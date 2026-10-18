@@ -19,7 +19,14 @@ Sur Android : ouvre l'adresse dans Chrome, menu ⋮ > **Installer l'application*
 
 Le dépôt est privé. La météo publiée (`data/wx.json`) est lisible par tous, mais ne contient que des données publiques. **Ni ton carnet ni tes coins** n'y sont : ils restent sur ton téléphone. L'appli publiée est chiffrée avec ton mot de passe, qui reste dans les secrets de GitHub.
 
+## Forêts et relief
+
+`scripts/statique.py` précalcule, une seule fois, une grille de 250 m sur le 64 et le 65 : essence dominante et part de forêt (BD Forêt V2 de l'IGN, 44 000 polygones), pente et exposition (altimétrie IGN). Le résultat (`data/static.json` + `static.bin.gz`, environ 600 Ko) est gardé dans le cache de GitHub et n'est recalculé que si le script change. La carte multiplie la météo par ces poids ; la case « Tenir compte des arbres et de l'exposition » permet de revenir à la météo seule.
+
 ## Budget Open-Meteo
+
+Seuls les passages planifiés (6 h 40 et 18 h 40) et les lancements manuels interrogent Open-Meteo. Une modification du code reprend la dernière météo publiée.
+
 
 4 400 appels au plus par passage, soit 8 800 par jour, sous la limite gratuite de 10 000. Le script ralentit tout seul pour rester sous 450 appels par minute. Si Open-Meteo bloque, il complète avec le fichier précédent et l'appli l'indique.
 
