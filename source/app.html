@@ -1,0 +1,1804 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Cèpomètre</title>
+<meta name="description" content="Carte de l'indice de pousse des cèpes, calculée sur la météo récente, les prévisions et les essences forestières.">
+<meta name="theme-color" content="#2f3d27">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png" type="image/png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=IBM+Plex+Mono:wght@400;500&family=Young+Serif&display=swap">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css">
+<style>
+/* Mise en page : la carte occupe tout l'écran ; un panneau à onglets glisse
+   par le bas sur téléphone et devient une colonne à droite sur grand écran. */
+:root {
+  --bg: #eef1e8;          /* sous-bois clair, légèrement vert */
+  --panel: #fbfcf8;
+  --line: #d4dacb;
+  --fg: #1d2419;
+  --muted: #5d6855;
+  --accent: #8a4a1c;      /* chapeau de cèpe */
+  --accent-fg: #fff8f0;
+  --moss: #4d6b3a;
+  --chip: #e2e8d8;
+  --warn-bg: #fbe9d0;
+  --warn-fg: #6b3a07;
+  --shadow: 0 6px 24px rgba(29, 36, 25, .16);
+  --font-display: "Young Serif", Georgia, "Times New Roman", serif;
+  --font-body: "Atkinson Hyperlegible", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  --sheet-closed: calc(56px + env(safe-area-inset-bottom, 0px));
+  --sheet-open: min(48vh, 460px);
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #11160f; --panel: #181f15; --line: #2c3627; --fg: #e6ebdf; --muted: #9aa690;
+    --accent: #d08a4f; --accent-fg: #1c0f05; --moss: #8db071; --chip: #232c1f;
+    --warn-bg: #3a2610; --warn-fg: #f3c98f; --shadow: 0 6px 24px rgba(0, 0, 0, .5);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #11160f; --panel: #181f15; --line: #2c3627; --fg: #e6ebdf; --muted: #9aa690;
+  --accent: #d08a4f; --accent-fg: #1c0f05; --moss: #8db071; --chip: #232c1f;
+  --warn-bg: #3a2610; --warn-fg: #f3c98f; --shadow: 0 6px 24px rgba(0, 0, 0, .5);
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: var(--bg); color: var(--fg);
+  font: 15px/1.45 var(--font-body);
+  overflow: hidden; -webkit-tap-highlight-color: transparent;
+}
+button, input, select, textarea { font: inherit; color: inherit; }
+button { cursor: pointer; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+
+#map { position: absolute; inset: 0; background: var(--bg); }
+.leaflet-container { font: 12px/1.4 var(--font-body); background: var(--bg); }
+.leaflet-control-attribution { background: color-mix(in srgb, var(--panel) 80%, transparent) !important; color: var(--muted) !important; }
+.leaflet-control-attribution a { color: var(--muted) !important; }
+
+/* Barre du haut */
+.top {
+  position: absolute; z-index: 1100; left: 0; right: 0; top: 0;
+  padding-top: calc(env(safe-area-inset-top, 0px) + 10px);
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  pointer-events: none;
+  display: grid; gap: 8px;
+}
+.top > * { pointer-events: auto; }
+.brand {
+  display: flex; align-items: center; gap: 10px; justify-self: start;
+  background: var(--panel); border-radius: 999px; padding: 6px 14px 6px 8px; box-shadow: var(--shadow);
+  max-width: 100%;
+}
+.top-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; min-width: 0; }
+.sp-pick { background: var(--panel); border-radius: 999px; box-shadow: var(--shadow); display: flex; align-items: center; padding: 0 4px 0 12px; max-width: 100%; }
+.sp-pick select { border: 0; background: transparent; color: var(--fg); font: 700 14px var(--font-body); padding: 9px 6px; max-width: 60vw; }
+.brand svg { flex: none; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.brand h1 { font: 19px/1 var(--font-display); margin: 0; letter-spacing: .01em; }
+.brand .status { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.days {
+  display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none;
+  padding: 2px 2px 6px; margin: 0 -2px; scroll-snap-type: x proximity;
+}
+.days::-webkit-scrollbar { display: none; }
+.day {
+  flex: none; scroll-snap-align: center;
+  display: grid; justify-items: center; gap: 1px;
+  min-width: 52px; padding: 6px 8px; border-radius: 12px;
+  border: 1px solid var(--line); background: var(--panel); box-shadow: 0 2px 8px rgba(0,0,0,.08);
+}
+.day .dw { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.day .dn { font: 500 15px/1.1 var(--font-mono); }
+.day .ds { font: 500 11px/1 var(--font-mono); padding: 2px 5px; border-radius: 6px; margin-top: 2px; }
+.day.fc { border-style: dashed; }
+.day[aria-pressed="true"] { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+.day[aria-pressed="true"] .dw { color: inherit; opacity: .75; }
+.day.today .dw { color: var(--accent); font-weight: 700; }
+.day[aria-pressed="true"].today .dw { color: inherit; }
+
+/* Boutons flottants */
+.fabs {
+  position: absolute; z-index: 1100; right: max(16px, env(safe-area-inset-right, 0px));
+  top: calc(env(safe-area-inset-top, 0px) + 184px);
+  display: grid; gap: 10px;
+}
+.fab {
+  width: 46px; height: 46px; border-radius: 14px; border: 1px solid var(--line);
+  background: var(--panel); box-shadow: var(--shadow);
+  display: grid; place-items: center;
+}
+.fab svg { width: 22px; height: 22px; stroke: var(--fg); fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.fab[aria-pressed="true"] { background: var(--fg); }
+.fab[aria-pressed="true"] svg { stroke: var(--bg); }
+.layers {
+  position: absolute; z-index: 1250; right: calc(max(16px, env(safe-area-inset-right, 0px)) + 56px);
+  top: calc(env(safe-area-inset-top, 0px) + 184px);
+  width: min(260px, calc(100vw - 100px));
+  background: var(--panel); border: 1px solid var(--line); border-radius: 16px; box-shadow: var(--shadow);
+  padding: 12px; display: grid; gap: 10px;
+  max-height: calc(100% - env(safe-area-inset-top, 0px) - 184px - var(--sheet-closed) - 16px); overflow-y: auto; overscroll-behavior: contain;
+}
+.range-row b { color: var(--fg); }
+.seg2 { grid-template-columns: repeat(2, 1fr); }
+/* Légende sur la carte */
+.map-legend {
+  position: absolute; z-index: 1050; left: max(16px, env(safe-area-inset-left, 0px)); bottom: calc(var(--sheet-closed) + 12px);
+  background: var(--panel); border-radius: 12px; box-shadow: var(--shadow); padding: 6px 8px; display: grid; gap: 3px;
+  max-width: calc(100vw - 32px); pointer-events: none;
+}
+.map-legend .sw { display: flex; gap: 2px; }
+.map-legend .sw span { min-width: 30px; height: 18px; border-radius: 4px; font: 500 11px/18px var(--font-mono); text-align: center; font-variant-numeric: tabular-nums; }
+.map-legend .ramp { width: 180px; height: 8px; }
+.map-legend .cap { font-size: 10px; color: var(--muted); letter-spacing: .04em; text-transform: uppercase; }
+.legend-steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(64px, 1fr)); gap: 4px; }
+.legend-steps div { border-radius: 8px; padding: 6px 6px 5px; font-size: 12px; line-height: 1.2; }
+.legend-steps b { display: block; font: 500 13px var(--font-mono); font-variant-numeric: tabular-nums; }
+.forest-legend { border-top: 1px solid var(--line); padding-top: 8px; display: grid; gap: 8px; }
+.forest-legend summary { cursor: pointer; font-weight: 700; font-size: 14px; color: var(--accent); }
+.forest-legend[open] { display: grid; }
+.forest-legend p { margin: 6px 0 0; }
+.legend-img { background: #fff; border-radius: 10px; padding: 8px; margin-top: 8px; }
+.legend-img img { display: block; width: 100%; height: auto; }
+.progress { height: 6px; border-radius: 99px; background: var(--chip); overflow: hidden; }
+.progress > div { height: 100%; width: 0; background: var(--accent); transition: width .2s; }
+.store-list { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; font-size: 14px; margin: 0; }
+.store-list dt { color: var(--muted); }
+.store-list dd { margin: 0; text-align: right; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.layers h3 { margin: 0; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.seg { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; background: var(--chip); padding: 3px; border-radius: 10px; }
+.seg button { border: 0; background: transparent; padding: 7px 4px; border-radius: 8px; font-size: 13px; }
+.seg button[aria-pressed="true"] { background: var(--panel); box-shadow: 0 1px 4px rgba(0,0,0,.12); font-weight: 700; }
+.toggle { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 14px; }
+.toggle input { width: 20px; height: 20px; accent-color: var(--accent); }
+.range-row { display: grid; gap: 4px; font-size: 13px; color: var(--muted); }
+.range-row input { width: 100%; accent-color: var(--accent); }
+
+/* Panneau à onglets */
+.sheet {
+  position: absolute; z-index: 1200; left: 0; right: 0; bottom: 0;
+  height: var(--sheet-closed);
+  background: var(--panel); border-radius: 18px 18px 0 0; box-shadow: 0 -6px 24px rgba(0,0,0,.14);
+  display: grid; grid-template-rows: auto 1fr; overflow: hidden;
+  transition: height .25s ease;
+}
+.sheet.open { height: calc(var(--sheet-open) + env(safe-area-inset-bottom, 0px)); }
+.tabs {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px;
+  padding: 8px max(12px, env(safe-area-inset-right, 0px)) 6px max(12px, env(safe-area-inset-left, 0px));
+  border-bottom: 1px solid var(--line);
+}
+.tab {
+  border: 0; background: transparent; padding: 8px 6px; border-radius: 10px;
+  font-size: 14px; color: var(--muted); display: flex; align-items: center; justify-content: center; gap: 6px;
+}
+.tab[aria-selected="true"] { color: var(--fg); background: var(--chip); font-weight: 700; }
+.tab .badge { font: 500 11px/1 var(--font-mono); background: var(--accent); color: var(--accent-fg); border-radius: 99px; padding: 3px 6px; }
+.pane {
+  overflow-y: auto; overscroll-behavior: contain;
+  padding-block: 14px calc(18px + env(safe-area-inset-bottom, 0px));
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  display: grid; gap: 14px; align-content: start;
+}
+.pane h2 { margin: 0; font: 20px/1.2 var(--font-display); text-wrap: balance; }
+.pane p { margin: 0; }
+.muted { color: var(--muted); }
+.small { font-size: 13px; }
+.label { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+
+.notice { background: var(--warn-bg); color: var(--warn-fg); border-radius: 12px; padding: 10px 12px; font-size: 14px; display: flex; gap: 10px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+.notice button { border: 1px solid currentColor; background: transparent; border-radius: 8px; padding: 4px 10px; }
+
+/* Légende */
+.legend { display: grid; gap: 6px; }
+.ramp { height: 10px; border-radius: 99px; background: linear-gradient(90deg, rgba(214,196,120,.25), #d6c478 20%, #c99a4b 40%, #a8662b 60%, #7a3b17 80%, #4a1f0c); }
+.ramp-labels { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); }
+
+/* Liste des meilleurs secteurs */
+.list { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; }
+.row {
+  display: grid; grid-template-columns: 46px 1fr auto; gap: 12px; align-items: center;
+  padding: 10px 8px; border-radius: 12px; border: 0; background: transparent; text-align: left; width: 100%;
+}
+.row:hover { background: var(--chip); }
+.row .meta { min-width: 0; }
+.row .meta b { display: block; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row .meta span { font-size: 13px; color: var(--muted); }
+.pill { font: 500 14px/1 var(--font-mono); text-align: center; padding: 8px 0; border-radius: 10px; color: #fff8f0; }
+.chev { color: var(--muted); }
+
+/* Fiche d'un coin */
+.verdict { display: grid; grid-template-columns: auto 1fr; gap: 14px; align-items: center; }
+.big {
+  width: 84px; height: 84px; border-radius: 22px; display: grid; place-items: center; align-content: center;
+  color: #fff8f0;
+}
+.big b { font: 34px/1 var(--font-display); }
+.big span { font: 11px/1 var(--font-mono); opacity: .85; margin-top: 4px; }
+.verdict h2 { font-size: 22px; }
+.facts { display: grid; gap: 0; margin: 0; }
+.fact { display: grid; grid-template-columns: 22px 1fr; gap: 10px; padding: 9px 0; border-top: 1px solid var(--line); }
+.fact:first-child { border-top: 0; }
+.fact .ic { font: 500 13px/1.45 var(--font-mono); color: var(--accent); text-align: center; }
+.fact p { font-size: 14px; }
+.fact strong { font-weight: 700; }
+.ess { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.ess select { padding: 6px 8px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); max-width: 100%; }
+.chart-wrap { overflow-x: auto; }
+.chart { width: 100%; min-width: 300px; height: auto; display: block; }
+.chart .bar { fill: var(--moss); }
+.chart .bar.fc { fill: var(--moss); opacity: .45; }
+.chart .line { fill: none; stroke: var(--accent); stroke-width: 2; }
+.chart .fczone { fill: var(--chip); }
+.chart .grid { stroke: var(--line); stroke-width: 1; }
+.chart .sel { stroke: var(--fg); stroke-width: 1.2; stroke-dasharray: 3 3; }
+.chart text { fill: var(--muted); font: 10px var(--font-mono); }
+.chart .dot { fill: var(--accent); stroke: var(--panel); stroke-width: 2; }
+.chart-key { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
+.chart-key i { display: inline-block; width: 12px; height: 8px; border-radius: 2px; margin-right: 5px; vertical-align: middle; }
+
+.actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.sp-list { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; }
+.sp-row { display: grid; grid-template-columns: 40px 1fr auto; gap: 10px; align-items: center; width: 100%; text-align: left; border: 0; background: transparent; padding: 6px 6px; border-radius: 10px; }
+.sp-row:hover { background: var(--chip); }
+.sp-row[aria-current="true"] { background: var(--chip); }
+.sp-row .pill { font-size: 13px; padding: 6px 0; }
+.sp-row b { font-weight: 700; }
+.sp-row i { font-style: italic; color: var(--muted); font-size: 12px; }
+.warn-line { font-size: 13px; color: var(--warn-fg); background: var(--warn-bg); border-radius: 10px; padding: 8px 10px; }
+.btn {
+  border: 1px solid var(--line); background: var(--panel); border-radius: 12px; padding: 9px 14px;
+  display: inline-flex; align-items: center; gap: 8px; font-weight: 700; font-size: 14px; text-decoration: none; color: var(--fg);
+}
+.btn.primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+.btn.ghost { background: transparent; }
+.btn.danger { color: #b3261e; border-color: currentColor; }
+.links { display: flex; gap: 16px; flex-wrap: wrap; font-size: 13px; }
+.links a { color: var(--accent); }
+
+/* Carnet */
+.entry { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; padding: 12px 0; border-top: 1px solid var(--line); }
+.entry:first-child { border-top: 0; }
+.entry .when { font: 500 13px var(--font-mono); color: var(--muted); }
+.entry .where { font-weight: 700; min-width: 0; overflow-wrap: anywhere; }
+.entry .res { justify-self: end; font-size: 12px; font-weight: 700; padding: 4px 8px; border-radius: 99px; white-space: nowrap; }
+.res.found { background: var(--accent); color: var(--accent-fg); }
+.res.none { background: var(--chip); color: var(--muted); }
+.entry .model { grid-column: 1 / -1; font-size: 13px; color: var(--muted); }
+.entry .entry-actions { grid-column: 1 / -1; display: flex; gap: 14px; flex-wrap: wrap; font-size: 13px; }
+.entry .entry-actions button { border: 0; background: none; padding: 2px 0; color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
+.entry .entry-actions button.confirm { color: #b3261e; font-weight: 700; }
+.calib { background: var(--chip); border-radius: 14px; padding: 12px; display: grid; gap: 8px; }
+
+/* Formulaire */
+.modal {
+  position: absolute; inset: 0; z-index: 1400; background: rgba(10, 14, 8, .45);
+  display: grid; align-items: end; justify-items: center;
+}
+.modal form {
+  width: min(520px, 100%); max-height: 92%; overflow-y: auto;
+  background: var(--panel); border-radius: 20px 20px 0 0; box-shadow: var(--shadow);
+  padding-block: 18px calc(18px + env(safe-area-inset-bottom, 0px));
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  display: grid; gap: 12px;
+}
+.modal h2 { margin: 0; font: 20px/1.2 var(--font-display); }
+.field { display: grid; gap: 4px; font-size: 13px; color: var(--muted); }
+.field input, .field select, .field textarea { padding: 9px 10px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); width: 100%; }
+.field textarea { min-height: 64px; resize: vertical; }
+.two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.placing {
+  position: absolute; z-index: 1300; left: 50%; transform: translateX(-50%);
+  top: calc(env(safe-area-inset-top, 0px) + 184px);
+  background: var(--fg); color: var(--bg); border-radius: 99px; padding: 8px 14px; font-size: 14px; display: flex; gap: 12px; align-items: center;
+  max-width: calc(100vw - 32px);
+}
+.placing button { border: 0; background: transparent; color: inherit; text-decoration: underline; }
+.toast {
+  position: absolute; z-index: 1500; left: 50%; transform: translateX(-50%);
+  bottom: calc(var(--sheet-closed) + 16px);
+  background: var(--fg); color: var(--bg); padding: 9px 14px; border-radius: 12px; font-size: 14px; box-shadow: var(--shadow);
+  max-width: calc(100vw - 32px);
+}
+.me-dot { width: 16px; height: 16px; border-radius: 50%; background: #2a7de1; border: 3px solid #fff; box-shadow: 0 0 0 6px rgba(42,125,225,.25); }
+.find-pin { width: 24px; height: 24px; }
+
+@media (min-width: 900px) {
+  .map-legend { bottom: 24px; }
+  #map { right: 420px; }
+  .sheet, .sheet.open {
+    left: auto; top: 0; width: 420px; height: 100%;
+    border-radius: 0; box-shadow: -2px 0 18px rgba(0,0,0,.08);
+    padding-top: env(safe-area-inset-top, 0px);
+  }
+  .top { right: 420px; }
+  .fabs { right: calc(420px + 16px); top: calc(env(safe-area-inset-top, 0px) + 184px); }
+  .layers { right: calc(420px + 72px); }
+  .toast { left: calc(50% - 210px); bottom: 24px; }
+  .placing { left: calc(50% - 210px); }
+  .modal { align-items: center; }
+  .modal form { border-radius: 20px; }
+}
+@media (prefers-reduced-motion: reduce) { .sheet { transition: none; } }
+</style>
+</head>
+<body>
+<div id="map" role="application" aria-label="Carte de l'indice de pousse"></div>
+
+<header class="top">
+ <div class="top-row">
+  <div class="brand">
+    <svg width="30" height="30" viewBox="0 0 64 64" aria-hidden="true">
+      <path d="M8 30c0-12 11-20 24-20s24 8 24 20c0 3-2 4-5 4H13c-3 0-5-1-5-4z" fill="#8a4a1c"/>
+      <path d="M22 34h20c1 8 3 14 3 19 0 4-6 6-13 6s-13-2-13-6c0-5 2-11 3-19z" fill="#efe3c8"/>
+      <path d="M24 40c4 1 12 1 16 0M23 46c5 1 13 1 18 0" stroke="#c9b48c" stroke-width="1.6" fill="none"/>
+    </svg>
+    <h1>Cèpomètre</h1>
+ <span class="status" id="status">Chargement…</span>
+  </div>
+  <label class="sp-pick" for="spSel"><span class="sr">Espèce</span><select id="spSel" aria-label="Espèce affichée"></select></label>
+  </div>
+  <nav class="days" id="days" aria-label="Choisir le jour"></nav>
+</header>
+
+<div class="fabs">
+  <button class="fab" id="btnLayers" aria-label="Fonds de carte et couches" aria-pressed="false">
+    <svg viewBox="0 0 24 24"><path d="M12 3 2 8l10 5 10-5-10-5z"/><path d="m2 13 10 5 10-5"/><path d="m2 17.5 10 5 10-5"/></svg>
+  </button>
+  <button class="fab" id="btnLocate" aria-label="Me localiser">
+    <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>
+  </button>
+</div>
+
+<div class="layers" id="layers" hidden>
+  <h3>Fond de carte</h3>
+  <div class="seg" id="baseSeg">
+    <button type="button" data-base="plan" aria-pressed="true">Plan IGN</button>
+    <button type="button" data-base="photo" aria-pressed="false">Photos</button>
+    <button type="button" data-base="topo" aria-pressed="false">Relief</button>
+  </div>
+  <h3>Couches</h3>
+  <label class="toggle" for="tgIndex">Indice de pousse <input type="checkbox" id="tgIndex" checked></label>
+  <label class="toggle" for="tgForest">Forêts et essences (IGN) <input type="checkbox" id="tgForest" checked></label>
+  <div class="range-row">
+    <label for="opForest">Opacité des forêts</label>
+    <input type="range" id="opForest" min="0.2" max="1" step="0.05" value="0.55">
+  </div>
+  <details class="forest-legend">
+    <summary>Légende des forêts (IGN)</summary>
+    <p class="small muted">Chaque couleur est un type de forêt de la BD Forêt : l'essence dominante (ou le mélange), et si la forêt est fermée ou ouverte. Pour lire le type exact d'un endroit, touche-le : la fiche l'affiche.</p>
+    <p class="small"><strong>Favorables aux cèpes</strong> : chênes, châtaignier, hêtre, mélanges de feuillus, sapin ou épicéa. <strong>Moins</strong> : pins. <strong>Peu ou pas</strong> : peupleraies, robinier, landes.</p>
+    <p class="small muted">Astuce : décoche « Indice de pousse » pour voir les couleurs de l'IGN sans mélange.</p>
+    <div class="legend-img"><img src="https://data.geopf.fr/annexes/ressources/legendes/LANDCOVER.FORESTINVENTORY.V2-legend.png" alt="Légende officielle de la carte forestière BD Forêt V2 de l'IGN" loading="lazy"></div>
+  </details>
+  <h3>Échelle de l'indice</h3>
+  <div class="range-row">
+    <label for="thr">Afficher seulement à partir de <b class="mono" id="thrVal">0</b>/100</label>
+    <input type="range" id="thr" min="0" max="90" step="5" value="0">
+  </div>
+  <div class="seg seg2" id="colSeg">
+    <button type="button" data-col="steps" aria-pressed="true">Par paliers</button>
+    <button type="button" data-col="ramp" aria-pressed="false">Dégradé</button>
+  </div>
+  <label class="toggle" for="tgStretch"><span id="stretchLbl">Répartir les paliers du seuil à 100</span> <input type="checkbox" id="tgStretch" checked></label>
+  <label class="toggle" for="tgContour" id="contourRow">Contours entre paliers <input type="checkbox" id="tgContour" checked></label>
+  <div class="range-row">
+    <label for="opIndex">Opacité de l'indice</label>
+    <input type="range" id="opIndex" min="0.3" max="1" step="0.05" value="0.65">
+  </div>
+  <h3>Finesse de la grille</h3>
+  <div class="seg" id="fineSeg">
+    <button type="button" data-fine="0" aria-pressed="true">Normale</button>
+    <button type="button" data-fine="1" aria-pressed="false">Fine</button>
+    <button type="button" data-fine="2" aria-pressed="false">Très fine</button>
+  </div>
+  <label class="toggle" for="tgSmooth">Lisser entre les points <input type="checkbox" id="tgSmooth" checked></label>
+  <p class="small muted" id="fineNote"></p>
+  <h3>Hors ligne</h3>
+  <p class="small muted">Garde les cartes de la zone affichée (trois niveaux de zoom de plus) et sa météo, pour t'en servir en forêt sans réseau.</p>
+  <button type="button" class="btn" id="saveZone">Garder cette zone</button>
+  <div class="progress" id="zoneProg" hidden><div id="zoneBar"></div></div>
+  <p class="small muted" id="offlineInfo"></p>
+</div>
+
+<section class="sheet" id="sheet">
+  <div class="tabs" role="tablist">
+    <button class="tab" role="tab" id="tab-zones" aria-selected="true" aria-controls="pane-zones">Secteurs</button>
+    <button class="tab" role="tab" id="tab-spot" aria-selected="false" aria-controls="pane-spot">Ce coin</button>
+    <button class="tab" role="tab" id="tab-log" aria-selected="false" aria-controls="pane-log">Carnet <span class="badge mono" id="logCount">0</span></button>
+  </div>
+  <div class="pane" id="pane-zones" role="tabpanel" aria-labelledby="tab-zones"></div>
+  <div class="pane" id="pane-spot" role="tabpanel" aria-labelledby="tab-spot" hidden></div>
+  <div class="pane" id="pane-log" role="tabpanel" aria-labelledby="tab-log" hidden></div>
+</section>
+
+<div class="map-legend" id="mapLegend" aria-hidden="true" hidden></div>
+<div class="modal" id="modal" hidden></div>
+<div class="placing" id="placing" hidden></div>
+<div class="toast" id="toast" role="status" hidden></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+<script src="model.js"></script>
+<script>
+(function () {
+  "use strict";
+  var M = window.CepeModel;
+
+  /* ---------- Outils ---------- */
+  var $ = function (s, el) { return (el || document).querySelector(s); };
+  function el(tag, attrs, html) { var e = document.createElement(tag); if (attrs) for (var k in attrs) e.setAttribute(k, attrs[k]); if (html != null) e.innerHTML = html; return e; }
+  function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); }
+  function iso(d) { var z = function (n) { return String(n).padStart(2, "0"); }; return d.getFullYear() + "-" + z(d.getMonth() + 1) + "-" + z(d.getDate()); }
+  function addDays(isoStr, n) { var d = new Date(isoStr + "T12:00:00"); d.setDate(d.getDate() + n); return iso(d); }
+  function daysBetween(a, b) { return Math.round((new Date(b + "T12:00:00") - new Date(a + "T12:00:00")) / 864e5); }
+  var WD = ["dim.", "lun.", "mar.", "mer.", "jeu.", "ven.", "sam."];
+  var MO = ["janv.", "févr.", "mars", "avr.", "mai", "juin", "juil.", "août", "sept.", "oct.", "nov.", "déc."];
+  function fmtDay(isoStr, withWd) { var d = new Date(isoStr + "T12:00:00"); return (withWd ? WD[d.getDay()] + " " : "") + d.getDate() + " " + MO[d.getMonth()]; }
+  function fmtNum(n, dec) { return Number(n).toLocaleString("fr-FR", { maximumFractionDigits: dec || 0, minimumFractionDigits: dec || 0 }); }
+  function fmtCoord(lat, lon) { return fmtNum(Math.abs(lat), 3) + "° " + (lat >= 0 ? "N" : "S") + " · " + fmtNum(Math.abs(lon), 3) + "° " + (lon >= 0 ? "E" : "O"); }
+  function store(k, v) { try { localStorage.setItem("cepometre." + k, JSON.stringify(v)); } catch (e) {} }
+  function load(k, d) { try { var v = localStorage.getItem("cepometre." + k); return v ? JSON.parse(v) : d; } catch (e) { return d; } }
+  function toast(msg) { var t = $("#toast"); t.textContent = msg; t.hidden = false; clearTimeout(toast._t); toast._t = setTimeout(function () { t.hidden = true; }, 2800); }
+  function distKm(a, b) { var R = 6371, r = Math.PI / 180, dLa = (b.lat - a.lat) * r, dLo = (b.lon - a.lon) * r; var h = Math.sin(dLa / 2) ** 2 + Math.cos(a.lat * r) * Math.cos(b.lat * r) * Math.sin(dLo / 2) ** 2; return 2 * R * Math.asin(Math.sqrt(h)); }
+
+  function fetchWithTimeout(url, ms) {
+    var ctl = new AbortController(); var t = setTimeout(function () { ctl.abort(); }, ms || 15000);
+    return fetch(url, { signal: ctl.signal }).finally(function () { clearTimeout(t); });
+  }
+
+  /* Couleurs de l'indice : de la paille au brun du chapeau. */
+  var STOPS = [[0, [214, 196, 120, 0]], [15, [214, 196, 120, 0.15]], [25, [214, 196, 120, 0.9]], [40, [201, 154, 75, 1]], [60, [168, 102, 43, 1]], [80, [122, 59, 23, 1]], [100, [74, 31, 12, 1]]];
+  function scoreColor(s) {
+    s = Math.max(0, Math.min(100, s));
+    for (var i = 1; i < STOPS.length; i++) {
+      if (s <= STOPS[i][0]) {
+        var a = STOPS[i - 1], b = STOPS[i], f = (s - a[0]) / (b[0] - a[0]);
+        var c = a[1].map(function (v, j) { return v + (b[1][j] - v) * f; });
+        return { rgb: "rgb(" + Math.round(c[0]) + "," + Math.round(c[1]) + "," + Math.round(c[2]) + ")", arr: c, alpha: c[3] };
+      }
+    }
+    return { rgb: "rgb(74,31,12)", arr: [74, 31, 12, 1], alpha: 1 };
+  }
+  /* Couleur affichée sur la carte, selon le seuil et l'étalement choisis.
+   * Sous le seuil : rien. Avec l'étalement, tout le dégradé est réparti
+   * entre le seuil et 100, pour mieux distinguer 82 de 95 par exemple. */
+  function displayValue(s) {
+    var t = state.thr;
+    if (s < t) return null;
+    return state.stretch && t > 0 ? 30 + (s - t) / (100 - t) * 70 : s;
+  }
+  /* Paliers : six couleurs bien distinctes, lisibles sur le plan IGN comme sur les photos.
+   * Sans seuil : 20, 40, 60, 70, 80, 90. Avec un seuil et « répartir » : cinq paliers égaux du seuil à 100. */
+  var STEP_COLORS = [[233, 226, 160], [245, 200, 66], [240, 145, 58], [218, 82, 40], [170, 20, 60], [96, 26, 110]];
+  var STEP_INK = ["#2a2410", "#2a2410", "#2a1606", "#fff8f0", "#fff8f0", "#fff8f0"];
+  var FIXED_EDGES = [20, 40, 60, 70, 80, 90];
+  function stepClasses() {
+    var t = state.thr, out = [];
+    if (t > 0 && state.stretch) {
+      for (var i = 0; i < 5; i++) out.push({ lo: Math.round(t + i * (100 - t) / 5), c: i + 1 });
+    } else {
+      // Paliers fixes qui dépassent le seuil ; le premier commence au seuil.
+      FIXED_EDGES.forEach(function (e, i) { var nx = FIXED_EDGES[i + 1] || 101; if (nx > t) out.push({ lo: Math.max(e, t), c: i }); });
+    }
+    out.forEach(function (x, i) { x.hi = i < out.length - 1 ? out[i + 1].lo : 100; x.idx = i; x.rgb = STEP_COLORS[x.c]; x.ink = STEP_INK[x.c]; });
+    return out;
+  }
+  var stepCache = null;
+  function classOf(s) {
+    var cl = stepCache || (stepCache = stepClasses());
+    for (var i = cl.length - 1; i >= 0; i--) if (s >= cl[i].lo) return cl[i];
+    return null;
+  }
+  function displayColor(s) {
+    if (state.colorMode === "steps") {
+      var ci = classOf(s); if (!ci) return null;
+      return { rgb: "rgb(" + ci.rgb.join(",") + ")", arr: ci.rgb.concat(1), alpha: ci.c === 0 ? 0.6 : 1, cls: ci.idx };
+    }
+    var v = displayValue(s); return v == null ? null : scoreColor(v);
+  }
+  function solid(s) {
+    if (state.colorMode === "steps") { var ci = classOf(s); return ci ? "rgb(" + ci.rgb.join(",") + ")" : "var(--chip)"; }
+    var c = scoreColor(Math.max(s, 26)); return c.rgb;
+  }
+  function ink(s) {
+    if (state.colorMode === "steps") { var ci = classOf(s); return ci ? ci.ink : "var(--muted)"; }
+    return "#fff8f0";
+  }
+  function pillStyle(s) { return "background:" + solid(s) + ";color:" + ink(s); }
+  function verdict(s) {
+    if (s >= 80) return "Très bon";
+    if (s >= 60) return "Bon";
+    if (s >= 40) return "Possible";
+    if (s >= 20) return "Peu probable";
+    return "Rien à espérer";
+  }
+
+  /* ---------- État ---------- */
+  var TODAY = iso(new Date());
+  var OFFSETS = []; for (var o = -3; o <= 6; o++) OFFSETS.push(o);
+  var state = {
+    sel: TODAY,
+    base: load("base", "plan"),
+    showIndex: load("showIndex", true),
+    thr: load("thr", 0),
+    stretch: load("stretch", true),
+    colorMode: load("colorMode", "steps"),   // "steps" : paliers, "ramp" : dégradé
+    contours: load("contours", true),
+    idxOpacity: load("idxOpacity", 0.65),
+    fine: load("fine", 0),
+    smooth: load("smooth", true),
+    showForest: load("showForest", true),
+    forestOpacity: load("forestOpacity", 0.55),
+    params: load("params", {}),          // calage des « Cèpes (tous) », inchangé
+    species: load("species", "cepes"),
+    spParams: load("spParams", {}),      // calage des autres espèces, séparé
+    log: load("log", null),
+    spot: null,       // { lat, lon, days, elevation, essence, essenceLabel, essenceSource, manual }
+    me: null,
+    placingId: null
+  };
+
+  // Premier lancement : carnet vide (le code est public, aucun coin n'y est écrit).
+  if (!state.log) { state.log = []; store("log", state.log); }
+
+  /* ---------- Carte ---------- */
+  var map = L.map("map", { zoomControl: false, attributionControl: true, preferCanvas: true, tap: true }).setView(load("view", [43.22, -0.78]).slice(0, 2), load("view", [0, 0, 9])[2] || 9);
+  map.attributionControl.setPrefix(false);
+
+  function wmts(layer, fmt, tms, opts) {
+    return L.tileLayer("https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=" + layer +
+      "&STYLE=normal&TILEMATRIXSET=" + tms + "&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}&FORMAT=" + fmt,
+      Object.assign({ attribution: "© IGN Géoplateforme", tileSize: 256, crossOrigin: true }, opts || {}));
+  }
+  var bases = {
+    plan: wmts("GEOGRAPHICALGRIDSYSTEMS.PLANIGNV2", "image/png", "PM", { maxNativeZoom: 18, maxZoom: 19 }),
+    photo: wmts("ORTHOIMAGERY.ORTHOPHOTOS", "image/jpeg", "PM", { maxNativeZoom: 19, maxZoom: 19 }),
+    topo: L.tileLayer("https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png", { subdomains: "abc", maxNativeZoom: 17, maxZoom: 19, attribution: "© OpenStreetMap, SRTM · OpenTopoMap (CC-BY-SA)" })
+  };
+  var forest = wmts("LANDCOVER.FORESTINVENTORY.V2", "image/png", "PM_6_16", { minNativeZoom: 6, maxNativeZoom: 16, maxZoom: 19, opacity: state.forestOpacity, attribution: "BD Forêt® V2 IGN" });
+  map.createPane("cells"); map.getPane("cells").style.zIndex = 350; map.getPane("cells").style.pointerEvents = "none";
+  map.createPane("forest"); map.getPane("forest").style.zIndex = 300;
+  forest.options.pane = "forest";
+  var cellsLayer = L.layerGroup().addTo(map);
+  var cellRenderer = L.canvas({ pane: "cells", padding: 0.3 });
+  var logLayer = L.layerGroup().addTo(map);
+  var spotMarker = null, meMarker = null;
+  map.attributionControl.addAttribution("Météo : Open-Meteo.com (CC-BY 4.0)");
+
+  function applyLayers() {
+    Object.keys(bases).forEach(function (k) { if (k !== state.base && map.hasLayer(bases[k])) map.removeLayer(bases[k]); });
+    if (!map.hasLayer(bases[state.base])) bases[state.base].addTo(map);
+    if (state.showForest) { if (!map.hasLayer(forest)) forest.addTo(map); } else if (map.hasLayer(forest)) map.removeLayer(forest);
+    forest.setOpacity(state.forestOpacity);
+    if (state.showIndex) { if (!map.hasLayer(cellsLayer)) cellsLayer.addTo(map); } else if (map.hasLayer(cellsLayer)) map.removeLayer(cellsLayer);
+    document.querySelectorAll("#baseSeg button").forEach(function (b) { b.setAttribute("aria-pressed", String(b.dataset.base === state.base)); });
+    $("#tgIndex").checked = state.showIndex; $("#tgForest").checked = state.showForest; $("#opForest").value = state.forestOpacity;
+    $("#thr").value = state.thr; $("#thrVal").textContent = state.thr; $("#tgStretch").checked = state.stretch; $("#tgStretch").disabled = state.thr === 0;
+    $("#tgSmooth").checked = state.smooth;
+    document.querySelectorAll("#colSeg button").forEach(function (b) { b.setAttribute("aria-pressed", String(b.dataset.col === state.colorMode)); });
+    $("#stretchLbl").textContent = state.colorMode === "steps" ? "Répartir les paliers du seuil à 100" : "Étaler les couleurs du seuil à 100";
+    $("#tgContour").checked = state.contours; $("#contourRow").hidden = state.colorMode !== "steps" || !state.smooth;
+    $("#opIndex").value = state.idxOpacity;
+    if (gridState) renderMapLegend();
+    document.querySelectorAll("#fineSeg button").forEach(function (b) { b.setAttribute("aria-pressed", String(+b.dataset.fine === state.fine)); });
+    $("#fineSeg").hidden = !!SRV;
+    if (SRV) $("#fineNote").textContent = "Grille fixée par le serveur : 5 km partout, 1,7 km dans les secteurs où le relief et la pluie varient le plus.";
+    else $("#fineNote").textContent = ["Un point tous les 6,7 km. Le bon choix au quotidien, utilisable dès le zoom large.",
+      "Un point tous les 3,3 km. Quatre fois plus de points pour une même zone ; à partir d'un zoom moyen.",
+      "Un point tous les 1,7 km, proche de la maille des modèles de Météo-France. Seize fois plus de points : pour un secteur précis, zoomé de près."][state.fine];
+  }
+
+  /* ---------- Météo (Open-Meteo, modèles Météo-France en priorité) ----------
+   * Open-Meteo gratuit : 600 appels par minute, 5 000 par heure, 10 000 par jour.
+   * Un point compte pour un appel par tranche de 14 jours demandés : on demande
+   * 28 jours (21 passés, 7 de prévision), soit 2 appels par point.
+   * L'appli tient ses propres compteurs (minute, heure, jour), gardés sur le
+   * téléphone, et s'arrête d'elle-même avant les limites. */
+  var WX_PAST = 21, WX_FC = 7, WX_DAYS = WX_PAST + WX_FC;
+  var WX_TTL = 6 * 3600e3;
+  var wx = new Map();   // clé "lat,lon" -> { lat, lon, elevation, days, t }
+  var DAILY = "precipitation_sum,temperature_2m_max,temperature_2m_min";
+  function normDays(d) {
+    var t = d.daily.time, rain = [], tmin = [], tmax = [];
+    var lastMin = 10, lastMax = 18;
+    for (var i = 0; i < t.length; i++) {
+      var r = d.daily.precipitation_sum[i], a = d.daily.temperature_2m_min[i], b = d.daily.temperature_2m_max[i];
+      rain.push(r == null ? 0 : r);
+      lastMin = a == null ? lastMin : a; lastMax = b == null ? lastMax : b;
+      tmin.push(lastMin); tmax.push(lastMax);
+    }
+    return { date: t, rain: rain, tmin: tmin, tmax: tmax };
+  }
+
+  /* Cache météo durable (IndexedDB) :
+   * - moins de 6 h : utilisé tel quel, aucune requête ;
+   * - jusqu'à 3 jours : affiché tout de suite, puis remplacé quand la mise à jour arrive ;
+   * - météo des sorties du carnet : gardée tant que la sortie existe (le passé ne change plus). */
+  var WX_STALE = 3 * 864e5;
+  var idb = (function () {
+    var p = null;
+    function open() {
+      if (p) return p;
+      p = new Promise(function (res, rej) {
+        try {
+          var r = indexedDB.open("cepometre", 1);
+          r.onupgradeneeded = function () { if (!r.result.objectStoreNames.contains("wx")) r.result.createObjectStore("wx", { keyPath: "k" }); };
+          r.onsuccess = function () { res(r.result); };
+          r.onerror = function () { rej(r.error); };
+        } catch (e) { rej(e); }
+      });
+      return p;
+    }
+    function run(mode, fn) {
+      return open().then(function (db) {
+        return new Promise(function (res) {
+          var t = db.transaction("wx", mode), out = fn(t.objectStore("wx"));
+          t.oncomplete = function () { res(out && out.value !== undefined ? out.value : out); };
+          t.onerror = t.onabort = function () { res(null); };
+        });
+      }).catch(function () { return null; });
+    }
+    return {
+      getMany: function (keys) {
+        return run("readonly", function (s) {
+          var out = { value: {} };
+          keys.forEach(function (k) { var r = s.get(k); r.onsuccess = function () { if (r.result) out.value[k] = r.result; }; });
+          return out;
+        }).then(function (v) { return v || {}; });
+      },
+      put: function (rec) { return run("readwrite", function (s) { s.put(rec); }); },
+      count: function () { return run("readonly", function (s) { var out = { value: 0 }; var r = s.count(); r.onsuccess = function () { out.value = r.result; }; return out; }); },
+      prune: function (before) {
+        return run("readwrite", function (s) {
+          var r = s.openCursor();
+          r.onsuccess = function () {
+            var c = r.result; if (!c) return;
+            if (!/^(e|t|srv):/.test(c.value.k) && c.value.t < before) c.delete();
+            c.continue();
+          };
+        });
+      },
+      clearWeather: function () {
+        return run("readwrite", function (s) {
+          var r = s.openCursor();
+          r.onsuccess = function () { var c = r.result; if (!c) return; if (!/^(e|t|srv):/.test(c.value.k)) c.delete(); c.continue(); };
+        });
+      }
+    };
+  })();
+  function packWx(key, rec) { return { k: key, la: rec.lat, lo: rec.lon, e: rec.elevation, t: rec.t, d: rec.days.date, r: rec.days.rain, n: rec.days.tmin, x: rec.days.tmax }; }
+  function unpackWx(c) { return { lat: c.la, lon: c.lo, elevation: c.e, t: c.t, days: { date: c.d, rain: c.r, tmin: c.n, tmax: c.x } }; }
+  // Charge en mémoire les points demandés qui sont sur le téléphone.
+  async function wxLoad(keys) {
+    var need = keys.filter(function (k) { return !wx.has(k); });
+    if (!need.length) return;
+    var got = await idb.getMany(need);
+    Object.keys(got).forEach(function (k) { if (Date.now() - got[k].t < WX_STALE || k.indexOf("e:") === 0) wx.set(k, unpackWx(got[k])); });
+  }
+  /* Relief au point exact (pente, exposition), service d'altimétrie de l'IGN.
+   * 9 altitudes en carré de 60 m de côté autour du point, pente et orientation par la
+   * méthode de Horn (celle des logiciels de cartographie). Gardé sans limite de durée. */
+  var topoMem = new Map();
+  async function topoAt(lat, lon) {
+    var key = "t:" + lat.toFixed(4) + "," + lon.toFixed(4);
+    if (topoMem.has(key)) return topoMem.get(key);
+    var got = await idb.getMany([key]);
+    if (got[key]) { topoMem.set(key, got[key]); return got[key]; }
+    var d = 60, dLat = d / 111320, dLon = d / (111320 * Math.cos(lat * Math.PI / 180));
+    var lats = [], lons = [];
+    [1, 0, -1].forEach(function (r) { [-1, 0, 1].forEach(function (c) { lats.push((lat + r * dLat).toFixed(6)); lons.push((lon + c * dLon).toFixed(6)); }); });
+    var url = "https://data.geopf.fr/altimetrie/1.0/calcul/alti/rest/elevation.json?lon=" + lons.join("|") + "&lat=" + lats.join("|") +
+      "&resource=ign_rge_alti_wld&delimiter=|&indent=false&measures=false&zonly=true";
+    var res = null;
+    for (var attempt = 0; attempt < 3 && !(res && res.ok); attempt++) {
+      if (attempt) await sleep(800 * attempt);
+      try { res = await fetchWithTimeout(url, 12000); } catch (e) { res = null; }
+    }
+    if (!res || !res.ok) throw new Error("relief indisponible");
+    var j = await res.json(), z = j.elevations || [];
+    if (z.length !== 9 || z.some(function (v) { return typeof v !== "number" || v <= -9999; })) throw new Error("relief hors couverture");
+    // z : a b c / d e f / g h i, du nord au sud et d'ouest en est.
+    var dzdx = ((z[2] + 2 * z[5] + z[8]) - (z[0] + 2 * z[3] + z[6])) / (8 * d);
+    var dzdy = ((z[0] + 2 * z[1] + z[2]) - (z[6] + 2 * z[7] + z[8])) / (8 * d);
+    var slope = Math.atan(Math.hypot(dzdx, dzdy)) * 180 / Math.PI;
+    var aspect = (Math.atan2(-dzdx, -dzdy) * 180 / Math.PI + 360) % 360;   // vers où descend le versant
+    var rec = { k: key, t: Date.now(), z: z[4], slope: +slope.toFixed(1), aspect: Math.round(aspect) };
+    topoMem.set(key, rec); idb.put(rec);
+    return rec;
+  }
+  function wxGet(key) { return wx.get(key) || null; }
+  function wxPut(key, rec) { rec.t = Date.now(); wx.set(key, rec); idb.put(packWx(key, rec)); }
+  function wxFresh(rec) { return rec && Date.now() - rec.t < WX_TTL; }
+  // Ménage au démarrage : anciennes données, et l'ancien cache de la version 4.
+  idb.prune(Date.now() - WX_STALE);
+  try { for (var li = localStorage.length - 1; li >= 0; li--) { var lk = localStorage.key(li); if (lk && lk.indexOf("cepometre.wx:") === 0) localStorage.removeItem(lk); } } catch (e) {}
+
+  /* Compteurs d'appels, persistants : on se garde de la marge sous les limites. */
+  var LIMITS = { min: 450, hour: 4200, day: 8500 };
+  var budget = { log: load("calls", []), pausedUntil: load("pausedUntil", 0), reason: load("pauseReason", "") };
+  function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+  function callWeight(nLoc, nDays) { return nLoc * Math.max(1, Math.ceil(nDays / 14)); }
+  function usage(now) {
+    budget.log = budget.log.filter(function (x) { return now - x[0] < 864e5; });
+    var u = { min: 0, hour: 0, day: 0 };
+    budget.log.forEach(function (x) { u.day += x[1]; if (now - x[0] < 36e5) u.hour += x[1]; if (now - x[0] < 6e4) u.min += x[1]; });
+    return u;
+  }
+  // Quand pourra-t-on dépenser w appels ? (0 = tout de suite)
+  function nextSlot(w, now) {
+    var u = usage(now), wait = 0;
+    var until = function (span, limit, used) {
+      // On attend que les appels les plus anciens de la fenêtre sortent du compte.
+      var inWin = budget.log.filter(function (x) { return now - x[0] < span; }), freed = 0;
+      for (var i = 0; i < inWin.length; i++) { freed += inWin[i][1]; if (used - freed + w <= limit) return inWin[i][0] + span - now + 500; }
+      return span;
+    };
+    if (u.min + w > LIMITS.min) wait = Math.max(wait, until(6e4, LIMITS.min, u.min));
+    if (u.hour + w > LIMITS.hour) wait = Math.max(wait, until(36e5, LIMITS.hour, u.hour));
+    if (u.day + w > LIMITS.day) wait = Math.max(wait, until(864e5, LIMITS.day, u.day));
+    return Math.max(wait, budget.pausedUntil - now, 0);
+  }
+  function pause(ms, reason) {
+    budget.pausedUntil = Date.now() + ms; budget.reason = reason;
+    store("pausedUntil", budget.pausedUntil); store("pauseReason", reason);
+  }
+  function Stale() { var e = new Error("annulé"); e.stale = true; return e; }
+  function LimitError(waitMs, reason) { var e = new Error("limite"); e.limit = true; e.waitMs = waitMs; e.reason = reason; return e; }
+
+  // isStale : fonction qui dit si la demande n'a plus lieu d'être (la carte a bougé).
+  async function omFetch(url, w, isStale) {
+    for (var attempt = 0; attempt < 2; attempt++) {
+      for (;;) {
+        if (isStale && isStale()) throw Stale();
+        var wait = nextSlot(w, Date.now());
+        if (wait <= 0) break;
+        // Au-delà de 2 minutes d'attente, on n'attend pas : on affiche ce qu'on a et on prévient.
+        if (wait > 120000) throw LimitError(wait, budget.pausedUntil > Date.now() ? budget.reason : (wait > 36e5 ? "quota du jour de l'appli" : "quota de l'heure de l'appli"));
+        setStatus(wait);
+        await sleep(Math.min(wait, 3000));
+      }
+      budget.log.push([Date.now(), w]); store("calls", budget.log);
+      var res = await fetchWithTimeout(url, 25000);
+      if (res.status === 429) {
+        var reason = ""; try { reason = (await res.json()).reason || ""; } catch (e) {}
+        if (/daily|day/i.test(reason)) { pause(msToTomorrow(), "limite du jour d'Open-Meteo"); }
+        else if (/hour/i.test(reason)) { pause(20 * 60000, "limite de l'heure d'Open-Meteo"); }
+        else { pause(65000, "limite de la minute d'Open-Meteo"); }
+        continue;
+      }
+      if (!res.ok) throw new Error("Open-Meteo " + res.status);
+      if (budget.pausedUntil) { budget.pausedUntil = 0; store("pausedUntil", 0); }
+      return res.json();
+    }
+    throw LimitError(budget.pausedUntil - Date.now(), budget.reason);
+  }
+  function msToTomorrow() { var d = new Date(); d.setHours(24, 5, 0, 0); return d - new Date(); }
+
+  async function fetchPoints(points, extra, isStale) {
+    var out = [], size = 40;
+    var nDays = extra ? 40 : WX_DAYS;
+    for (var i = 0; i < points.length; i += size) {
+      var chunk = points.slice(i, i + size);
+      var url = "https://api.open-meteo.com/v1/forecast?latitude=" + chunk.map(function (p) { return p.lat.toFixed(4); }).join(",") +
+        "&longitude=" + chunk.map(function (p) { return p.lon.toFixed(4); }).join(",") +
+        "&daily=" + DAILY + "&timezone=Europe%2FParis" + (extra || "&past_days=" + WX_PAST + "&forecast_days=" + WX_FC);
+      var j = await omFetch(url, callWeight(chunk.length, nDays), isStale);
+      var arr = Array.isArray(j) ? j : [j];
+      arr.forEach(function (d, n) { out.push({ src: chunk[n], lat: chunk[n].lat, lon: chunk[n].lon, elevation: d.elevation, days: normDays(d) }); });
+    }
+    return out;
+  }
+  async function fetchArchive(lat, lon, start, end) {
+    var url = "https://archive-api.open-meteo.com/v1/archive?latitude=" + lat.toFixed(4) + "&longitude=" + lon.toFixed(4) +
+      "&start_date=" + start + "&end_date=" + end + "&daily=" + DAILY + "&timezone=Europe%2FParis";
+    var d = await omFetch(url, callWeight(1, daysBetween(start, end) + 1));
+    return { lat: lat, lon: lon, elevation: d.elevation, days: normDays(d) };
+  }
+  // Sol au point choisi : température à 6 cm et humidité entre 3 et 9 cm (moyenne des dernières 24 h).
+  async function fetchSoil(lat, lon) {
+    var url = "https://api.open-meteo.com/v1/forecast?latitude=" + lat.toFixed(4) + "&longitude=" + lon.toFixed(4) +
+      "&hourly=soil_temperature_6cm,soil_moisture_3_to_9cm&past_days=2&forecast_days=1&timezone=Europe%2FParis";
+    var d = await omFetch(url, 1);
+    var h = d.hourly, now = Date.now(), t = [], m = [];
+    for (var i = 0; i < h.time.length; i++) {
+      var ts = new Date(h.time[i]).getTime();
+      if (ts <= now && ts > now - 24 * 3600e3) {
+        if (h.soil_temperature_6cm[i] != null) t.push(h.soil_temperature_6cm[i]);
+        if (h.soil_moisture_3_to_9cm[i] != null) m.push(h.soil_moisture_3_to_9cm[i]);
+      }
+    }
+    var avg = function (a) { return a.length ? a.reduce(function (s, v) { return s + v; }, 0) / a.length : null; };
+    return { temp: avg(t), moist: avg(m) };
+  }
+
+  /* ---------- Grille d'indice sur la zone affichée ----------
+   * La grille est fixe : son pas dépend seulement de la finesse choisie, jamais du zoom.
+   * Un même endroit a donc la même valeur à tous les zooms. Les pas sont emboîtés
+   * (6,7 km, 3,3 km, 1,7 km) : passer à une finesse plus fine réutilise les points déjà chargés. */
+  var gridState = { cells: [], step: 0, loading: false, error: null, tooWide: false, partial: 0, done: 0, todo: 0, gen: 0 };
+  var LAT_B = 0.015, LON_B = +(0.015 / Math.cos(46 * Math.PI / 180)).toFixed(6);
+  var FINESSE = [{ k: 4, minZoom: 8, label: "Normale" }, { k: 2, minZoom: 9, label: "Fine" }, { k: 1, minZoom: 10, label: "Très fine" }];
+  var MAX_FETCH = 450;   // points demandés au plus pour un affichage (environ 900 appels Open-Meteo)
+  function gkey(p) { return "g:" + p.i + "," + p.j; }
+  function gridFor(bounds) {
+    var k = FINESSE[state.fine].k, step = k * LAT_B, lonStep = k * LON_B;
+    var i0 = Math.floor(bounds.getSouth() / step), i1 = Math.ceil(bounds.getNorth() / step);
+    var j0 = Math.floor(bounds.getWest() / lonStep), j1 = Math.ceil(bounds.getEast() / lonStep);
+    var pts = [];
+    for (var i = i0; i <= i1; i++) for (var j = j0; j <= j1; j++) {
+      pts.push({ i: i * k, j: j * k, lat: +(i * step).toFixed(5), lon: +(j * lonStep).toFixed(5), dLat: step, dLon: lonStep });
+    }
+    return { k: k, pts: pts };
+  }
+  /* ---------- Données préparées par le serveur (data/wx.json) ----------
+   * Deux fois par jour, GitHub récupère la météo du 64 et du 65 et publie un seul fichier.
+   * L'appli le télécharge et fait tous les calculs elle-même, sans appeler Open-Meteo.
+   * Sans ce fichier (première ouverture hors ligne, site sans serveur), elle revient aux appels directs. */
+  var SRV = null, srvTried = false, srvFetchedAt = 0;
+  function parseSrv(d) {
+    var n = d.n, K3 = d.k || 3, date = [];
+    for (var t = 0; t < n; t++) date.push(addDays(d.d0, t));
+    var pts = new Map(), gen = Date.parse(d.generated);
+    d.pts.forEach(function (p) {
+      var sl = function (o) { var a = p.slice(3 + o * n, 3 + (o + 1) * n); for (var x = 0; x < a.length; x++) a[x] /= 10; return a; };
+      pts.set("g:" + p[0] + "," + p[1], { i: p[0], j: p[1], lat: +(p[0] * LAT_B).toFixed(5), lon: +(p[1] * LON_B).toFixed(5), elevation: p[2], t: gen,
+        coarse: p[0] % K3 === 0 && p[1] % K3 === 0, days: { date: date, rain: sl(0), tmin: sl(1), tmax: sl(2) } });
+    });
+    return { generated: d.generated, gen: gen, d0: d.d0, n: n, k: K3, pts: pts, blocked: d.blocked };
+  }
+  async function loadServer() {
+    var d = null;
+    try { var res = await fetchWithTimeout("data/wx.json", 25000); if (res.ok) { d = await res.json(); idb.put({ k: "srv:wx", t: Date.now(), d: d }); srvFetchedAt = Date.now(); } } catch (e) {}
+    if (!d) { var got = await idb.getMany(["srv:wx"]); if (got["srv:wx"]) d = got["srv:wx"].d; }
+    srvTried = true;
+    if (!d || !d.pts) return false;
+    if (SRV && SRV.generated === d.generated) return true;
+    SRV = parseSrv(d);
+    SRV.pts.forEach(function (rec, key) { wx.set(key, rec); });
+    return true;
+  }
+  function srvGrid() {
+    var b = map.getBounds(), cs = SRV.k * LAT_B, cl = SRV.k * LON_B;
+    var s = b.getSouth() - cs, n = b.getNorth() + cs, w = b.getWest() - cl, e = b.getEast() + cl, cells = [];
+    SRV.pts.forEach(function (r) {
+      if (r.lat >= s && r.lat <= n && r.lon >= w && r.lon <= e)
+        cells.push({ i: r.i, j: r.j, lat: r.lat, lon: r.lon, coarse: r.coarse, dLat: r.coarse ? cs : LAT_B, dLon: r.coarse ? cl : LON_B });
+    });
+    cells.sort(function (a, b) { return (b.coarse ? 1 : 0) - (a.coarse ? 1 : 0); });   // maille de base d'abord
+    gridState.cells = cells; gridState.tooWide = false; gridState.loading = false; gridState.partial = 0;
+    gridState.error = cells.length ? null : "Cette zone est hors du 64 et du 65 : pas de données préparées ici.";
+    drawCells(); renderZones(); setStatus();
+  }
+  // Météo en un point quelconque : maille fine si elle l'entoure, sinon maille de base.
+  // zTarget : altitude exacte du point (relief IGN) pour corriger la température (−6,5 °C par 1 000 m).
+  function srvAt(lat, lon, zTarget) {
+    function corners(kk) {
+      var fi = lat / (kk * LAT_B), fj = lon / (kk * LON_B), i0 = Math.floor(fi), j0 = Math.floor(fj), a = fi - i0, b = fj - j0;
+      return [[i0, j0, (1 - a) * (1 - b)], [i0 + 1, j0, a * (1 - b)], [i0, j0 + 1, (1 - a) * b], [i0 + 1, j0 + 1, a * b]]
+        .map(function (x) { return { r: SRV.pts.get("g:" + x[0] * kk + "," + x[1] * kk), w: x[2] }; });
+    }
+    var c = corners(1);
+    if (c.some(function (x) { return !x.r; })) c = corners(SRV.k).filter(function (x) { return x.r; });
+    var ws = c.reduce(function (s, x) { return s + x.w; }, 0);
+    if (!c.length || ws < 0.25) return null;
+    var n = SRV.n, rain = [], tmin = [], tmax = [], el = 0;
+    for (var t = 0; t < n; t++) { rain.push(0); tmin.push(0); tmax.push(0); }
+    c.forEach(function (x) {
+      var f = x.w / ws, d = x.r.days; el += x.r.elevation * f;
+      for (var t = 0; t < n; t++) { rain[t] += d.rain[t] * f; tmin[t] += d.tmin[t] * f; tmax[t] += d.tmax[t] * f; }
+    });
+    if (zTarget != null && isFinite(zTarget)) {
+      var dT = (zTarget - el) * -0.0065;
+      for (t = 0; t < n; t++) { tmin[t] += dT; tmax[t] += dT; }
+      el = zTarget;
+    }
+    return { lat: lat, lon: lon, elevation: Math.round(el), t: SRV.gen, days: { date: c[0].r.days.date, rain: rain, tmin: tmin, tmax: tmax } };
+  }
+  function interpStrict(vals, step, lonStep, lat, lon) {
+    var fi = lat / step, fj = lon / lonStep, i0 = Math.floor(fi), j0 = Math.floor(fj), a = fi - i0, b = fj - j0;
+    var v00 = vals.get(i0 + "," + j0), v10 = vals.get((i0 + 1) + "," + j0), v01 = vals.get(i0 + "," + (j0 + 1)), v11 = vals.get((i0 + 1) + "," + (j0 + 1));
+    if (v00 == null || v10 == null || v01 == null || v11 == null) return null;
+    return v00 * (1 - a) * (1 - b) + v10 * a * (1 - b) + v01 * (1 - a) * b + v11 * a * b;
+  }
+  document.addEventListener("visibilitychange", function () {
+    if (document.visibilityState === "visible" && SRV && Date.now() - srvFetchedAt > 2 * 3600e3)
+      loadServer().then(function () { if (SRV) srvGrid(); });
+  });
+
+  var refreshTimer = null;
+  function scheduleRefresh() { clearTimeout(refreshTimer); refreshTimer = setTimeout(refreshGrid, 800); }
+  async function refreshGrid() {
+    var z = map.getZoom(), gen = ++gridState.gen;
+    var isStale = function () { return gen !== gridState.gen; };
+    store("view", [map.getCenter().lat, map.getCenter().lng, z]);
+    if (!srvTried) return;               // on attend de savoir si les données du serveur sont là
+    if (SRV) { srvGrid(); return; }
+    if (z < FINESSE[state.fine].minZoom) { gridState.tooWide = true; gridState.loading = false; gridState.cells = []; drawCells(); renderZones(); setStatus(); return; }
+    gridState.tooWide = false;
+    var g = gridFor(map.getBounds().pad(0.05));
+    await wxLoad(g.pts.map(gkey));
+    if (isStale()) return;
+    var c = map.getCenter();
+    var missing = g.pts.filter(function (p) { return !wxFresh(wx.get(gkey(p))); })
+      .sort(function (a, b) { return Math.hypot(a.lat - c.lat, a.lon - c.lng) - Math.hypot(b.lat - c.lat, b.lon - c.lng); });
+    // Vue très large : on charge d'abord le centre, le reste viendra en déplaçant ou en zoomant.
+    gridState.partial = Math.max(0, missing.length - MAX_FETCH);
+    missing = missing.slice(0, MAX_FETCH);
+    gridState.cells = g.pts;
+    gridState.error = null;
+    drawCells(); renderZones();
+    if (!missing.length) { gridState.loading = false; setStatus(); return; }
+    gridState.loading = true; gridState.done = 0; gridState.todo = missing.length; setStatus(); renderZones();
+    try {
+      for (var i = 0; i < missing.length; i += 40) {
+        var got = await fetchPoints(missing.slice(i, i + 40), null, isStale);
+        if (isStale()) return;
+        got.forEach(function (r) { wxPut(gkey(r.src), r); });
+        gridState.done = Math.min(missing.length, i + 40);
+        drawCells(); renderZones(); setStatus();
+      }
+    } catch (err) {
+      if (err.stale || isStale()) return;
+      if (err.limit) {
+        var mins = Math.max(1, Math.ceil((err.waitMs || 60000) / 60000));
+        gridState.error = "Pause : " + err.reason + ". Nouvelle tentative possible dans " + (mins >= 120 ? "quelques heures" : "environ " + mins + " min") +
+          ". En attendant, la carte montre ce qui est déjà en mémoire et les fiches d'un coin restent possibles.";
+      } else {
+        gridState.error = navigator.onLine === false ? "Pas de réseau : l'appli affiche la dernière météo en mémoire." : "La météo n'a pas pu être chargée (" + err.message + ").";
+      }
+    }
+    if (isStale()) return;
+    gridState.loading = false;
+    drawCells(); renderZones(); setStatus();
+  }
+  /* ---------- Espèce choisie ----------
+   * « Cèpes (tous) » passe exactement par le calcul d'origine (même fonction, même calage). */
+  if (!M.SPECIES[state.species]) state.species = "cepes";
+  function SP(key) { return M.SPECIES[key || state.species]; }
+  function paramsFor(key) { return key === "cepes" ? state.params : (state.spParams[key] || {}); }
+  function wxScore(days, k, elevation) {
+    return state.species === "cepes" ? M.scoreDay(days, k, state.params, { elevation: elevation })
+                                     : M.scoreSpecies(days, k, state.species, paramsFor(state.species), { elevation: elevation });
+  }
+  function entrySpecies(e) { return e.species && M.SPECIES[e.species] ? e.species : "cepes"; }
+
+  function cellScore(p) {
+    var r = wx.get(gkey(p));
+    if (!r) return null;
+    var k = r.days.date.indexOf(state.sel);
+    if (k < 0) return null;
+    var s = wxScore(r.days, k, r.elevation);
+    return s ? s.score : null;
+  }
+  function drawCells() {
+    stepCache = null;
+    cellsLayer.clearLayers();
+    renderMapLegend();
+    if (state.smooth) drawSmooth(); else drawRects();
+    renderDays();
+  }
+  function legendStepsHTML(cls) {
+    return cls.map(function (c) { return '<span style="background:rgb(' + c.rgb.join(",") + ");color:" + c.ink + '">' + c.lo + "</span>"; }).join("");
+  }
+  function renderMapLegend() {
+    var box = $("#mapLegend");
+    if (!state.showIndex || gridState.tooWide) { box.hidden = true; return; }
+    if (state.colorMode === "steps") {
+      box.innerHTML = '<span class="cap">' + esc(SP().label) + " · à partir de</span><div class=\"sw\">" + legendStepsHTML(stepClasses()) + "</div>";
+    } else {
+      var t0 = state.thr, stops = [];
+      for (var q = 0; q <= 8; q++) { var v = t0 + (100 - t0) * q / 8, c = displayColor(v) || scoreColor(v); stops.push("rgba(" + c.arr.slice(0, 3).map(Math.round).join(",") + "," + Math.max(0.2, c.alpha).toFixed(2) + ") " + (q * 12.5) + "%"); }
+      box.innerHTML = '<span class="cap">' + esc(SP().label) + " · " + t0 + ' → 100</span><div class="ramp" style="background:linear-gradient(90deg,' + stops.join(",") + ')"></div>';
+    }
+    box.hidden = false;
+  }
+  function drawRects() {
+    gridState.cells.forEach(function (p) {
+      var s = cellScore(p);
+      if (s == null) return;
+      var c = displayColor(s);
+      if (!c || c.alpha <= 0.02) return;
+      L.rectangle([[p.lat - p.dLat / 2, p.lon - p.dLon / 2], [p.lat + p.dLat / 2, p.lon + p.dLon / 2]], {
+        renderer: cellRenderer, pane: "cells", stroke: false, fillColor: c.rgb, fillOpacity: state.idxOpacity * c.alpha, interactive: false
+      }).addTo(cellsLayer);
+    });
+  }
+  /* Lissage : interpolation bilinéaire entre les points de la grille,
+   * dessinée dans une image qui couvre l'écran (plus une marge). */
+  function interpGrid(vals, step, lonStep, lat, lon) {
+    var fi = lat / step, fj = lon / lonStep, i0 = Math.floor(fi), j0 = Math.floor(fj), a = fi - i0, b = fj - j0;
+    var c = [[i0, j0, (1 - a) * (1 - b)], [i0 + 1, j0, a * (1 - b)], [i0, j0 + 1, (1 - a) * b], [i0 + 1, j0 + 1, a * b]];
+    var sum = 0, wsum = 0;
+    for (var n = 0; n < 4; n++) {
+      var v = vals.get(c[n][0] + "," + c[n][1]);
+      if (v != null) { sum += v * c[n][2]; wsum += c[n][2]; }
+    }
+    return wsum >= 0.25 ? sum / wsum : null;
+  }
+  function drawSmooth() {
+    var cells = gridState.cells;
+    if (!cells.length) return;
+    var step = cells[0].dLat, lonStep = cells[0].dLon, vals = new Map(), fineVals = null;
+    if (SRV) {
+      step = SRV.k * LAT_B; lonStep = SRV.k * LON_B; fineVals = new Map();
+      cells.forEach(function (p) { var s = cellScore(p); if (s == null) return; fineVals.set(p.i + "," + p.j, s); if (p.coarse) vals.set(p.i / SRV.k + "," + p.j / SRV.k, s); });
+    } else
+    cells.forEach(function (p) { var s = cellScore(p); if (s != null) vals.set(Math.round(p.lat / step) + "," + Math.round(p.lon / lonStep), s); });
+    if (!vals.size) return;
+    var size = map.getSize(), px = state.colorMode === "steps" ? 2 : 3, padX = Math.round(size.x * 0.15), padY = Math.round(size.y * 0.15);
+    var W = Math.ceil((size.x + 2 * padX) / px), H = Math.ceil((size.y + 2 * padY) / px);
+    var cv = document.createElement("canvas"); cv.width = W; cv.height = H;
+    var ctx = cv.getContext("2d"), img = ctx.createImageData(W, H), d = img.data;
+    var lons = [], lats = [];
+    for (var x = 0; x < W; x++) lons.push(map.containerPointToLatLng([x * px + px / 2 - padX, 0]).lng);
+    for (var y = 0; y < H; y++) lats.push(map.containerPointToLatLng([0, y * px + px / 2 - padY]).lat);
+    var cls = new Int8Array(W * H).fill(-1), op = state.idxOpacity;
+    for (y = 0; y < H; y++) for (x = 0; x < W; x++) {
+      var s = fineVals ? interpStrict(fineVals, LAT_B, LON_B, lats[y], lons[x]) : null;
+      if (s == null) s = interpGrid(vals, step, lonStep, lats[y], lons[x]);
+      if (s == null) continue;
+      var c = displayColor(s);
+      if (!c) continue;
+      var k = (y * W + x) * 4;
+      if (c.cls != null) cls[y * W + x] = c.cls;
+      d[k] = c.arr[0]; d[k + 1] = c.arr[1]; d[k + 2] = c.arr[2]; d[k + 3] = Math.round(255 * op * c.alpha);
+    }
+    // Contours : un trait foncé sur le bord intérieur de chaque palier, du côté le plus élevé.
+    if (state.colorMode === "steps" && state.contours) {
+      for (y = 0; y < H; y++) for (x = 0; x < W; x++) {
+        var me = cls[y * W + x]; if (me < 0) continue;
+        var edge = (x > 0 && cls[y * W + x - 1] < me) || (x < W - 1 && cls[y * W + x + 1] < me) ||
+                   (y > 0 && cls[(y - 1) * W + x] < me) || (y < H - 1 && cls[(y + 1) * W + x] < me);
+        if (!edge) continue;
+        var kk = (y * W + x) * 4;
+        d[kk] = Math.round(d[kk] * 0.45); d[kk + 1] = Math.round(d[kk + 1] * 0.45); d[kk + 2] = Math.round(d[kk + 2] * 0.45); d[kk + 3] = 235;
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+    var sw = map.containerPointToLatLng([-padX, H * px - padY]), ne = map.containerPointToLatLng([W * px - padX, -padY]);
+    L.imageOverlay(cv.toDataURL(), L.latLngBounds(sw, ne), { pane: "cells", interactive: false }).addTo(cellsLayer);
+  }
+
+  /* ---------- Curseur des jours ---------- */
+  function renderDays() {
+    var box = $("#days");
+    var html = OFFSETS.map(function (off) {
+      var d = addDays(TODAY, off), dt = new Date(d + "T12:00:00");
+      var best = bestInView(d);
+      var lab = off === 0 ? "auj." : WD[dt.getDay()];
+      return '<button type="button" class="day' + (off > 0 ? " fc" : "") + (off === 0 ? " today" : "") + '" data-d="' + d + '" aria-pressed="' + (d === state.sel) + '" aria-label="' + fmtDay(d, true) + (off > 0 ? ", prévision" : "") + '">' +
+        '<span class="dw">' + lab + '</span><span class="dn">' + dt.getDate() + '</span>' +
+        (best != null ? '<span class="ds" style="' + pillStyle(best) + '">' + best + '</span>' : '<span class="ds muted">·</span>') +
+        "</button>";
+    }).join("");
+    box.innerHTML = html;
+    var cur = box.querySelector('[aria-pressed="true"]');
+    if (cur && !renderDays._scrolled) { cur.scrollIntoView({ inline: "center", block: "nearest" }); renderDays._scrolled = true; }
+  }
+  // Meilleur score dans la zone visible pour un jour donné.
+  // Zone visible élargie d'un pas de grille : de près, l'écran peut tenir entre quatre points.
+  function viewBoundsForGrid() {
+    var b = map.getBounds(), c = gridState.cells[0];
+    return c ? L.latLngBounds([b.getSouth() - c.dLat, b.getWest() - c.dLon], [b.getNorth() + c.dLat, b.getEast() + c.dLon]) : b;
+  }
+  function bestInView(d) {
+    var b = viewBoundsForGrid(), best = null;
+    gridState.cells.forEach(function (p) {
+      if (!b.contains([p.lat, p.lon])) return;
+      var r = wx.get(gkey(p)); if (!r) return;
+      var k = r.days.date.indexOf(d); if (k < 0) return;
+      var s = wxScore(r.days, k, r.elevation).score;
+      if (best == null || s > best) best = s;
+    });
+    return best;
+  }
+  $("#days").addEventListener("click", function (e) {
+    var b = e.target.closest(".day"); if (!b) return;
+    state.sel = b.dataset.d; drawCells(); renderZones(); if (state.spot) renderSpot(); setStatus();
+  });
+
+  function setStatus(waitMs) {
+    var s = $("#status");
+    if (gridState.loading && waitMs > 1500) s.textContent = "Météo " + gridState.done + "/" + gridState.todo + " · attente " + Math.ceil(waitMs / 1000) + " s (quota)";
+    else if (gridState.loading) s.textContent = "Météo " + gridState.done + "/" + gridState.todo + " points…";
+    else if (gridState.tooWide) s.textContent = "Zoome sur une région";
+    else s.textContent = (state.sel === TODAY ? "Aujourd'hui" : fmtDay(state.sel, true)) + (state.sel > TODAY ? " · prévision" : "");
+  }
+
+  /* ---------- Onglets ---------- */
+  var sheet = $("#sheet");
+  function showTab(name, open) {
+    ["zones", "spot", "log"].forEach(function (n) {
+      $("#tab-" + n).setAttribute("aria-selected", String(n === name));
+      $("#pane-" + n).hidden = n !== name;
+    });
+    if (open !== false) sheet.classList.add("open");
+    state.tab = name;
+  }
+  document.querySelectorAll(".tab").forEach(function (t) {
+    t.addEventListener("click", function () {
+      var name = t.id.replace("tab-", "");
+      if (state.tab === name && sheet.classList.contains("open") && window.innerWidth < 900) { sheet.classList.remove("open"); return; }
+      showTab(name);
+      if (name === "log") renderLog(true);
+    });
+  });
+
+  /* ---------- Onglet Secteurs ---------- */
+  function renderZones() {
+    var pane = $("#pane-zones"), parts = [];
+    var dayLabel = state.sel === TODAY ? "aujourd'hui" : fmtDay(state.sel, true);
+    parts.push('<div><h2>Où chercher des ' + esc(SP().short) + " " + esc(dayLabel) + ' ?</h2><p class="muted small">Indice météo de pousse sur la zone affichée' + (state.sel > TODAY ? ", d'après les prévisions" : "") + ". Touche la carte pour le détail d'un coin.</p></div>");
+    if (gridState.error) parts.push('<div class="notice"><span>' + esc(gridState.error) + '</span><button type="button" id="retry">Réessayer</button></div>');
+    if (gridState.tooWide) parts.push('<p class="notice">Zoome un peu pour afficher l\'indice' + (state.fine > 0 ? " en finesse « " + FINESSE[state.fine].label + " », ou passe en finesse Normale pour voir plus large" : "") + ".</p>");
+    if (gridState.partial && !gridState.loading) parts.push('<p class="notice">Zone affichée très large : le centre est chargé, ' + gridState.partial + " points restent vides pour ménager le quota. Déplace la carte ou zoome pour les compléter.</p>");
+    // Légende fidèle aux réglages : paliers, ou dégradé du seuil à 100.
+    var t0 = state.thr, stops = [];
+    if (state.colorMode === "steps") {
+      var names = { 0: "faible", 1: "possible", 2: "possible+", 3: "bon", 4: "très bon", 5: "excellent" };
+      parts.push('<div class="legend"><div class="legend-steps">' + stepClasses().map(function (c) {
+        return '<div style="background:rgb(' + c.rgb.join(",") + ");color:" + c.ink + '"><b>' + c.lo + "–" + c.hi + "</b>" + (state.thr > 0 && state.stretch ? "" : names[c.c]) + "</div>";
+      }).join("") + "</div>" +
+      (t0 > 0 ? '<p class="small muted">Masqué sous ' + t0 + "/100" + (state.stretch ? ", paliers répartis de " + t0 + " à 100" : "") + '. <button type="button" class="btn ghost" id="thrReset" style="padding:2px 8px;font-size:13px">Tout afficher</button></p>' : "") + "</div>");
+    } else {
+    for (var q = 0; q <= 8; q++) { var v = t0 + (100 - t0) * q / 8, c = displayColor(v) || scoreColor(v); stops.push("rgba(" + c.arr.slice(0, 3).map(Math.round).join(",") + "," + Math.max(0.2, c.alpha).toFixed(2) + ") " + (q * 12.5) + "%"); }
+    parts.push('<div class="legend"><div class="ramp" aria-hidden="true" style="background:linear-gradient(90deg,' + stops.join(",") + ')"></div><div class="ramp-labels mono"><span>' + t0 + '</span><span>' + Math.round((t0 + 100) / 2) + "</span><span>100</span></div>" +
+      (t0 > 0 ? '<p class="small muted">Masqué sous ' + t0 + "/100" + (state.stretch ? ", couleurs étalées de " + t0 + " à 100" : "") + '. <button type="button" class="btn ghost" id="thrReset" style="padding:2px 8px;font-size:13px">Tout afficher</button></p>' : "") + "</div>");
+    }
+
+    var b = viewBoundsForGrid(), rows = [];
+    gridState.cells.forEach(function (p) {
+      if (!b.contains([p.lat, p.lon])) return;
+      var r = wx.get(gkey(p)); if (!r) return;
+      var k = r.days.date.indexOf(state.sel); if (k < 0) return;
+      var sc = wxScore(r.days, k, r.elevation);
+      rows.push({ p: p, r: r, s: sc.score, parts: sc.parts });
+    });
+    var anyRows = rows.length;
+    rows = rows.filter(function (x) { return x.s >= state.thr; });
+    rows.sort(function (a, b) { return b.s - a.s; });
+    if (anyRows && !rows.length && !gridState.loading) parts.push('<p class="muted">Aucun secteur à ' + state.thr + "/100 ou plus dans la zone affichée ce jour-là. Baisse le seuil, change de jour ou déplace la carte.</p>");
+    // Évite d'afficher cinq cases voisines : on garde des secteurs distants d'au moins 4 km.
+    var picked = [];
+    for (var i = 0; i < rows.length && picked.length < 6; i++) {
+      if (picked.every(function (q) { return distKm(q.p, rows[i].p) > 4; })) picked.push(rows[i]);
+    }
+    if (gridState.loading) parts.push('<p class="muted small">Chargement de la météo : ' + gridState.done + " sur " + gridState.todo + " points, du centre vers les bords.</p>");
+    if (picked.length) {
+      parts.push('<div class="label">Meilleurs secteurs dans la zone</div><ul class="list">' + picked.map(function (x) {
+        var t = x.parts.trigger;
+        var why = t && t.raw ? fmtNum(t.raw, 0) + " mm le " + fmtDay(t.date) : "peu de pluie utile";
+        var dist = state.me ? " · " + fmtNum(distKm(state.me, x.p), 0) + " km" : "";
+        return '<li><button type="button" class="row" data-lat="' + x.p.lat + '" data-lon="' + x.p.lon + '">' +
+          '<span class="pill" style="' + pillStyle(x.s) + '">' + x.s + '</span>' +
+          '<span class="meta"><b>' + verdict(x.s) + " · " + fmtNum(x.r.elevation, 0) + ' m</b><span>' + why + dist + "</span></span>" +
+          '<span class="chev" aria-hidden="true">›</span></button></li>';
+      }).join("") + "</ul>");
+      parts.push('<p class="muted small">La carte ne voit que la météo, à l\'échelle de quelques kilomètres. Touche un coin : sa fiche ajoute l\'essence des arbres et l\'exposition du versant.</p>');
+    }
+    var u = usage(Date.now());
+    if (SRV) parts.push('<p class="small muted">Météo préparée par le serveur le ' + fmtDay(iso(new Date(SRV.gen)), true) + " à " + new Date(SRV.gen).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }) +
+      " · " + SRV.pts.size + " points sur le 64 et le 65, tous les 5 km et tous les 1,7 km là où le relief et la pluie varient le plus. Aucun appel météo depuis le téléphone.</p>");
+    else parts.push('<p class="small muted mono">Appels Open-Meteo : ' + u.min + " cette minute · " + u.hour + " cette heure · " + u.day + " aujourd'hui (limites gratuites 600 · 5 000 · 10 000)</p>");
+    pane.innerHTML = parts.join("");
+    var rt = $("#retry"); if (rt) rt.onclick = function () { refreshGrid(); };
+    var tr = $("#thrReset"); if (tr) tr.onclick = function () { setThr(0); };
+    pane.querySelectorAll(".row").forEach(function (b) {
+      b.addEventListener("click", function () {
+        var lat = +b.dataset.lat, lon = +b.dataset.lon;
+        map.setView([lat, lon], Math.max(map.getZoom(), 13));
+        openSpot(lat, lon);
+      });
+    });
+  }
+
+  /* ---------- Essence au point (BD Forêt V2) ---------- */
+  function tileAt(lat, lon, z) {
+    var n = Math.pow(2, z), x = (lon + 180) / 360 * n, lr = lat * Math.PI / 180;
+    var y = (1 - Math.log(Math.tan(lr) + 1 / Math.cos(lr)) / Math.PI) / 2 * n;
+    var col = Math.floor(x), row = Math.floor(y);
+    return { col: col, row: row, i: Math.floor((x - col) * 256), j: Math.floor((y - row) * 256) };
+  }
+  function parseEssence(txt) {
+    var strings = [];
+    try {
+      var j = JSON.parse(txt);
+      if (j && j.type === "FeatureCollection") {
+        if (!j.features.length) return { key: "horsforet", label: "Pas de forêt cartographiée ici", source: "BD Forêt V2" };
+        j.features.forEach(function (f) { Object.values(f.properties || {}).forEach(function (v) { if (typeof v === "string") strings.push(v); }); });
+      } else if (j) { strings.push(JSON.stringify(j)); }
+    } catch (e) { strings.push(String(txt).replace(/<[^>]+>/g, " | ")); }
+    var joined = strings.join(" | ");
+    var m = joined.match(/(For[eê]t (?:ferm[ée]e|ouverte)[^|<>"]{3,90}|Peupleraie|Lande[^|<>"]{0,40}|Formation herbac[ée]e[^|<>"]{0,40})/i);
+    var label = m ? m[1].replace(/\s+/g, " ").trim() : null;
+    var key = M.classifyEssence(label || joined);
+    if (key === "inconnu") return null;
+    return { key: key, label: label || M.ESSENCES[key].label, source: "BD Forêt V2 (IGN)" };
+  }
+  async function lookupEssence(lat, lon) {
+    var d = 0.00015, t = tileAt(lat, lon, 16);
+    var urls = [
+      "https://data.geopf.fr/wfs/ows?SERVICE=WFS&VERSION=2.0.0&REQUEST=GetFeature&TYPENAMES=LANDCOVER.FORESTINVENTORY.V2:formation_vegetale&OUTPUTFORMAT=application/json&COUNT=3&BBOX=" +
+        (lat - d) + "," + (lon - d) + "," + (lat + d) + "," + (lon + d) + ",urn:ogc:def:crs:EPSG::4326",
+      "https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetFeatureInfo&VERSION=1.0.0&LAYER=LANDCOVER.FORESTINVENTORY.V2&STYLE=normal&FORMAT=image/png&TILEMATRIXSET=PM_6_16&TILEMATRIX=16&TILEROW=" +
+        t.row + "&TILECOL=" + t.col + "&I=" + t.i + "&J=" + t.j + "&INFOFORMAT=text/html"
+    ];
+    for (var i = 0; i < urls.length; i++) {
+      try {
+        var res = await fetchWithTimeout(urls[i], 9000);
+        if (!res.ok) continue;
+        var r = parseEssence(await res.text());
+        if (r) return r;
+      } catch (e) { /* on essaie la source suivante */ }
+    }
+    return { key: "inconnu", label: null, source: null };
+  }
+
+  /* ---------- Fiche d'un coin ---------- */
+  async function openSpot(lat, lon) {
+    state.spot = { lat: lat, lon: lon, loading: true, essence: "inconnu" };
+    if (spotMarker) map.removeLayer(spotMarker);
+    spotMarker = L.circleMarker([lat, lon], { radius: 9, color: "#fff8f0", weight: 3, fillColor: "#8a4a1c", fillOpacity: 1 }).addTo(map);
+    showTab("spot");
+    renderSpot();
+    var key = "spot:" + lat.toFixed(4) + "," + lon.toFixed(4);
+    await wxLoad([key]);
+    var cached = wxGet(key), srvW = SRV ? srvAt(lat, lon, state.spot.topo && state.spot.topo.z) : null;
+    var wxP = srvW ? Promise.resolve(srvW) : wxFresh(cached) ? Promise.resolve(cached) : fetchPoints([{ lat: lat, lon: lon }]).then(function (a) { wxPut(key, a[0]); return a[0]; }).catch(function (e) { if (cached) return cached; throw e; });
+    var essP = lookupEssence(lat, lon);
+    if (!SRV) fetchSoil(lat, lon).then(function (s) {
+      if (!state.spot || state.spot.lat !== lat) return;
+      state.spot.soil = s; if (!state.spot.loading) renderSpot();
+    }).catch(function () {});
+    state.spot.topoState = "loading";
+    topoAt(lat, lon).then(function (t) {
+      if (!state.spot || state.spot.lat !== lat) return;
+      state.spot.topo = t; state.spot.topoState = "ok";
+      if (SRV && t.z != null) { var w2 = srvAt(lat, lon, t.z); if (w2) { state.spot.days = w2.days; state.spot.elevation = w2.elevation; } } if (!state.spot.loading) renderSpot();
+    }).catch(function () {
+      if (!state.spot || state.spot.lat !== lat) return;
+      state.spot.topoState = "error"; if (!state.spot.loading) renderSpot();
+    });
+    try {
+      var w = await wxP;
+      if (SRV && state.spot && state.spot.topo && state.spot.topo.z != null) w = srvAt(lat, lon, state.spot.topo.z) || w;
+      if (!state.spot || state.spot.lat !== lat) return;
+      state.spot.days = w.days; state.spot.elevation = w.elevation;
+    } catch (e) {
+      if (state.spot && state.spot.lat === lat) state.spot.error = e.limit ? "Pause : " + e.reason + ". Réessaie dans " + Math.max(1, Math.ceil((e.waitMs || 60000) / 60000)) + " min." : "La météo de ce coin n'a pas pu être chargée.";
+    }
+    if (state.spot && state.spot.lat === lat) { state.spot.loading = false; renderSpot(); }
+    var ess = await essP;
+    if (!state.spot || state.spot.lat !== lat || state.spot.manual) return;
+    state.spot.essence = ess.key; state.spot.essenceLabel = ess.label; state.spot.essenceSource = ess.source;
+    renderSpot();
+  }
+
+  function chartSVG(days, scores, kSel, kToday) {
+    var W = 340, H = 140, L0 = 28, R0 = 30, T0 = 10, B0 = 22, iw = W - L0 - R0, ih = H - T0 - B0, n = days.date.length;
+    var maxR = Math.max(20, Math.ceil(Math.max.apply(null, days.rain) / 10) * 10);
+    var bw = iw / n, x = function (i) { return L0 + i * bw; };
+    var yR = function (v) { return T0 + ih - (v / maxR) * ih; }, yS = function (v) { return T0 + ih - (v / 100) * ih; };
+    var s = '<svg class="chart" viewBox="0 0 ' + W + " " + H + '" role="img" aria-label="Pluie journalière et indice de pousse sur ' + n + ' jours">';
+    if (kToday >= 0) s += '<rect class="fczone" x="' + x(kToday + 1) + '" y="' + T0 + '" width="' + (L0 + iw - x(kToday + 1)) + '" height="' + ih + '"/>';
+    [0, 0.5, 1].forEach(function (f) { var y = T0 + ih - f * ih; s += '<line class="grid" x1="' + L0 + '" x2="' + (L0 + iw) + '" y1="' + y + '" y2="' + y + '"/>'; });
+    s += '<text x="' + (L0 - 4) + '" y="' + (T0 + 4) + '" text-anchor="end">' + maxR + '</text><text x="' + (L0 - 4) + '" y="' + (T0 + ih / 2 + 3) + '" text-anchor="end">' + maxR / 2 + '</text><text x="' + (L0 - 4) + '" y="' + (T0 + ih + 3) + '" text-anchor="end">0</text>';
+    s += '<text x="' + (L0 + iw + 4) + '" y="' + (T0 + 4) + '">100</text><text x="' + (L0 + iw + 4) + '" y="' + (T0 + ih / 2 + 3) + '">50</text><text x="' + (L0 + iw + 4) + '" y="' + (T0 + ih + 3) + '">0</text>';
+    for (var i = 0; i < n; i++) {
+      var r = days.rain[i]; if (r <= 0.2) continue;
+      var h = Math.max(1, (r / maxR) * ih);
+      s += '<rect class="bar' + (i > kToday ? " fc" : "") + '" x="' + (x(i) + bw * 0.15) + '" y="' + (T0 + ih - h) + '" width="' + (bw * 0.7) + '" height="' + h + '"/>';
+    }
+    var pts = scores.map(function (v, i) { return v == null ? null : (x(i) + bw / 2).toFixed(1) + "," + yS(v).toFixed(1); }).filter(Boolean);
+    s += '<polyline class="line" points="' + pts.join(" ") + '"/>';
+    if (kSel >= 0) {
+      var cx = x(kSel) + bw / 2;
+      s += '<line class="sel" x1="' + cx + '" x2="' + cx + '" y1="' + T0 + '" y2="' + (T0 + ih) + '"/>';
+      s += '<circle class="dot" cx="' + cx + '" cy="' + yS(scores[kSel]) + '" r="4"/>';
+    }
+    var lab = function (i, t, anchor) { return '<text x="' + (x(i) + bw / 2) + '" y="' + (H - 6) + '" text-anchor="' + anchor + '">' + t + "</text>"; };
+    s += lab(0, fmtDay(days.date[0]), "start");
+    if (kToday >= 0) s += lab(kToday, "auj.", "middle");
+    s += lab(n - 1, fmtDay(days.date[n - 1]), "end");
+    return s + "</svg>";
+  }
+
+  function topoSentence(sp, ex, tMean5) {
+    if (sp.topoState === "loading") return "Pente et exposition : lecture du relief IGN…";
+    if (!sp.topo) return "Pente et exposition : relief IGN indisponible pour l'instant, l'indice n'en tient pas compte.";
+    var t = sp.topo, pct = Math.round(Math.tan(t.slope * Math.PI / 180) * 100);
+    var where = t.slope < 3 ? "<strong>Terrain presque plat</strong> (" + fmtNum(t.slope, 0) + "°)" :
+      "<strong>Versant exposé " + M.aspectLabel(t.aspect) + ", pente de " + fmtNum(t.slope, 0) + "°</strong> (" + pct + " %)";
+    var eff = Math.round((ex.f - 1) * 100), why;
+    if (t.slope < 3) why = "l'exposition ne joue pas.";
+    else if (Math.abs(eff) < 3 && t.slope <= 30) why = Math.abs(ex.south) < 0.4 ? "orientation neutre, l'exposition change peu de chose." : "par cette température, l'exposition change peu de chose.";
+    else {
+      var hot = ex.heat > 0, southish = ex.south > 0, q = Math.abs(ex.south) < 0.7 ? "plutôt " : "";
+      var tw = ex.heat > 0.5 ? "chaud" : ex.heat > 0 ? "doux" : ex.heat < -0.5 ? "froid" : "frais";
+      why = hot ? (southish ? "par ce temps " + tw + ", un versant " + q + "au soleil sèche plus vite" : "par ce temps " + tw + ", un versant " + q + "à l'ombre garde l'humidité")
+                : (southish ? "par ce temps " + tw + ", un versant " + q + "au soleil reste plus tiède" : "par ce temps " + tw + ", un versant " + q + "à l'ombre se refroidit vite");
+      if (t.slope > 30) why = Math.abs(ex.south) < 0.4 || Math.abs(ex.heat) < 0.3 ? "pente très forte, l'eau file vite" : why + ", et la pente très forte draine vite";
+      why += " : <strong>" + (eff > 0 ? "+" : "−") + Math.abs(eff) + " %</strong> sur l'indice.";
+    }
+    return where + ", " + why;
+  }
+
+  // Toutes les espèces pour ce coin et ce jour, de la plus favorisée à la moins favorisée.
+  function speciesHere(days, k, sOpts) {
+    var rows = M.SPECIES_ORDER.map(function (key) {
+      var r = M.scoreSpotSpecies(days, k, key, paramsFor(key), sOpts);
+      return { key: key, s: r ? r.score : 0 };
+    });
+    var cep = rows[0], rest = rows.slice(1).sort(function (a, b) { return b.s - a.s; });
+    var row = function (x) {
+      var sp = M.SPECIES[x.key];
+      return '<li><button type="button" class="sp-row" data-sp="' + x.key + '" aria-current="' + (x.key === state.species) + '">' +
+        '<span class="pill" style="' + pillStyle(x.s) + '">' + x.s + "</span><span><b>" + esc(sp.label) + "</b>" + (sp.latin ? " <i>" + esc(sp.latin) + "</i>" : "") + "</span>" +
+        '<span class="chev" aria-hidden="true">›</span></button></li>';
+    };
+    return '<div><div class="label">Espèces ici ce jour-là</div><ul class="sp-list">' + row(cep) + rest.map(row).join("") + "</ul>" +
+      '<p class="small muted">Touche une espèce pour l\'afficher sur la carte. « Cèpes (tous) » est le modèle d\'origine ; le détail des cèpes et les autres espèces sont des estimations de départ, à caler avec ton carnet.</p></div>';
+  }
+
+  function renderSpot() {
+    var pane = $("#pane-spot"), sp = state.spot;
+    if (!sp) {
+      pane.innerHTML = '<div><h2>Touche un coin de la carte</h2><p class="muted">Tu verras son indice de pousse, la pluie qui l\'a déclenché, l\'essence des arbres et l\'évolution des prochains jours.</p></div>';
+      return;
+    }
+    var head = '<p class="label mono">' + fmtCoord(sp.lat, sp.lon) + (sp.elevation != null ? " · " + fmtNum(sp.elevation, 0) + " m" : "") + "</p>";
+    if (sp.loading) { pane.innerHTML = head + '<p class="muted">Chargement de la météo de ce coin…</p>'; return; }
+    if (sp.error || !sp.days) { pane.innerHTML = head + '<div class="notice"><span>' + esc(sp.error || "Pas de données.") + '</span><button type="button" id="retrySpot">Réessayer</button></div>'; $("#retrySpot").onclick = function () { openSpot(sp.lat, sp.lon); }; return; }
+
+    var days = sp.days, k = days.date.indexOf(state.sel), kToday = days.date.indexOf(TODAY);
+    if (k < 0) k = kToday >= 0 ? kToday : days.date.length - 1;
+    var sOpts = { elevation: sp.elevation, topo: sp.topo, essence: sp.essence };
+    var res = M.scoreSpotSpecies(days, k, state.species, paramsFor(state.species), sOpts);
+    var p = res.parts, score = res.score;
+    var series = days.date.map(function (d, i) { var r = M.scoreSpotSpecies(days, i, state.species, paramsFor(state.species), sOpts); return r ? r.score : null; });
+    var ess = M.ESSENCES[sp.essence] || M.ESSENCES.inconnu;
+
+    // Prochain pic attendu dans les prévisions.
+    var peak = null;
+    for (var i = Math.max(k + 1, kToday + 1); i < days.date.length; i++) if (series[i] != null && (!peak || series[i] > peak.s)) peak = { s: series[i], d: days.date[i] };
+
+    var t = p.trigger, facts = [];
+    facts.push(["mm", t && t.raw ? "<strong>Pluie déclenchante : " + fmtNum(t.raw, 0) + " mm le " + fmtDay(t.date, true) + "</strong>, il y a " + daysBetween(t.date, state.sel) + " jours. Pluie utile au total : " + fmtNum(p.effRain, 0) + " mm." : "<strong>Pas de pluie utile</strong> dans la fenêtre de pousse. Il faut en général plusieurs dizaines de millimètres."]);
+    facts.push(["j", "Délai estimé entre la pluie et la pousse : <strong>" + fmtNum(p.mu, 0) + " jours</strong> (" + (p.tLag >= 15 ? "plus court par temps doux" : "plus long quand il fait frais") + ", " + fmtNum(p.tLag, 0) + " °C de moyenne sur deux semaines)."]);
+    facts.push(["°C", "Air des 5 derniers jours, corrigé pour " + fmtNum(sp.elevation, 0) + " m d'altitude : <strong>" + fmtNum(p.tMean5, 0) + " °C</strong> en moyenne, " + (p.tempF >= 0.99 ? "idéal" : p.tMean5 < p.tLow ? "un peu frais" : "un peu chaud") + (state.species !== "cepes" ? " pour cette espèce (" + p.tLow + " à " + p.tHigh + " °C)" : "") + (p.frost ? ", avec " + p.frost + " nuit" + (p.frost > 1 ? "s" : "") + " de gel" : "") + "."]);
+    if (sp.soil && (sp.soil.temp != null || sp.soil.moist != null)) {
+      var mo = sp.soil.moist, moLab = mo == null ? null : mo < 0.15 ? "sec" : mo < 0.25 ? "frais" : mo < 0.35 ? "humide" : "très humide";
+      facts.push(["sol", "Sol ces dernières 24 h" + (sp.soil.temp != null ? " : <strong>" + fmtNum(sp.soil.temp, 0) + " °C à 6 cm</strong>" : "") +
+        (mo != null ? ", " + moLab + " entre 3 et 9 cm (" + fmtNum(mo * 100, 0) + " % d'eau)" : "") + ". Indicatif, ce n'est pas encore pris en compte dans l'indice."]);
+    }
+    facts.push(["∠", topoSentence(sp, res.expo, p.tMean5)]);
+    facts.push(["≈", "Saison : " + (p.seasonF >= 0.9 ? "pleine saison" : p.seasonF >= 0.5 ? "saison possible" : "hors saison") + (sp.elevation > 900 ? ", en altitude la saison finit plus tôt" : "") + "."]);
+    if (peak && peak.s >= 40 && state.sel <= TODAY) facts.push(["→", "Prochain pic prévu : <strong>" + verdict(peak.s).toLowerCase() + " vers le " + fmtDay(peak.d, true) + "</strong> (" + peak.s + "/100)."]);
+
+    var essOpts = Object.keys(M.ESSENCES).map(function (key) { return '<option value="' + key + '"' + (key === sp.essence ? " selected" : "") + ">" + esc(M.ESSENCES[key].label) + "</option>"; }).join("");
+    var essLine = sp.essenceSource
+      ? 'Carte forestière : <strong>' + esc(sp.essenceLabel) + "</strong>"
+      : (sp.manual ? "Essence choisie à la main" : "Essence non trouvée automatiquement : choisis-la d'après la couche des forêts ou ce que tu vois.");
+
+    pane.innerHTML = head +
+      '<div class="verdict"><div class="big" style="' + pillStyle(score) + '"><b>' + score + '</b><span>/100</span></div>' +
+      '<div><h2>' + verdict(score) + '</h2><p class="muted small">' + (state.sel === TODAY ? "Aujourd'hui" : fmtDay(state.sel, true)) + (state.sel > TODAY ? " · prévision" : "") + (state.species !== "cepes" ? " · " + esc(SP().label) : "") + (ess.w === null ? " · sans l'essence" : " · " + esc(ess.label.toLowerCase())) + (sp.topo && sp.topo.slope >= 3 ? " · versant " + M.aspectLabel(sp.topo.aspect) : "") + "</p></div></div>" +
+      '<div class="ess"><label class="label" for="essSel">Essence</label><select id="essSel">' + essOpts + "</select></div>" +
+      '<p class="small muted">' + essLine + "</p>" +
+      '<div class="facts">' + facts.map(function (f) { return '<div class="fact"><span class="ic">' + f[0] + "</span><p>" + f[1] + "</p></div>"; }).join("") + "</div>" +
+      '<div><div class="chart-wrap">' + chartSVG(days, series, k, kToday) + '</div><div class="chart-key"><span><i style="background:var(--moss)"></i>Pluie (mm, échelle de gauche)</span><span><i style="background:var(--accent)"></i>Indice (échelle de droite)</span><span><i style="background:var(--chip)"></i>Prévisions</span></div></div>' +
+      speciesHere(days, k, sOpts) +
+      (SP().warn ? '<p class="warn-line">' + esc(SP().warn) + " L'appli dit où et quand chercher, pas si ta cueillette est comestible.</p>" : "") +
+      '<div class="actions"><button type="button" class="btn primary" id="addFound">Noter une trouvaille ici</button><button type="button" class="btn" id="addNone">Sortie bredouille</button></div>' +
+      '<div class="links"><a href="https://www.geoportail.gouv.fr/carte?c=' + sp.lon + "," + sp.lat + '&z=15&l0=GEOGRAPHICALGRIDSYSTEMS.PLANIGNV2::GEOPORTAIL:OGC:WMTS(1)&l1=LANDCOVER.FORESTINVENTORY.V2::GEOPORTAIL:OGC:WMTS(0.7)&permalink=yes" target="_blank" rel="noopener">Voir sur Géoportail</a>' +
+      '<a href="https://www.google.com/maps/dir/?api=1&destination=' + sp.lat + "," + sp.lon + '" target="_blank" rel="noopener">Itinéraire</a></div>';
+
+    $("#essSel").onchange = function (e) { sp.essence = e.target.value; sp.manual = true; sp.essenceSource = null; renderSpot(); };
+    $("#addFound").onclick = function () { openForm({ lat: sp.lat, lon: sp.lon, found: true, essence: sp.essence, species: state.species }); };
+    $("#addNone").onclick = function () { openForm({ lat: sp.lat, lon: sp.lon, found: false, essence: sp.essence, species: state.species }); };
+    pane.querySelectorAll(".sp-row").forEach(function (b) { b.onclick = function () { setSpecies(b.dataset.sp); }; });
+  }
+
+  /* ---------- Carnet ---------- */
+  // Météo d'une sortie : gardée sur le téléphone ; une sortie de plus de 7 jours ne change plus.
+  async function weatherForEntry(e) {
+    if (SRV) { var kk = daysBetween(SRV.d0, e.date); if (kk >= 0 && kk < SRV.n) { var ws = srvAt(e.lat, e.lon); if (ws) return ws; } }
+    var key = "e:" + e.id + "@" + e.lat.toFixed(4) + "," + e.lon.toFixed(4) + "@" + e.date;
+    var age = daysBetween(e.date, TODAY);
+    await wxLoad([key]);
+    var have = wx.get(key);
+    if (have && (age > 7 || wxFresh(have))) return have;
+    var w;
+    if (age >= 0 && age <= 85) {
+      w = (await fetchPoints([{ lat: e.lat, lon: e.lon }], "&past_days=" + Math.min(92, age + 32) + "&forecast_days=1"))[0];
+    } else {
+      w = await fetchArchive(e.lat, e.lon, addDays(e.date, -40), e.date);
+    }
+    wxPut(key, w);
+    return w;
+  }
+  function amountLabel(e) { return e.found ? "Trouvé" + (e.amount ? " · " + e.amount : "") : "Bredouille"; }
+  function drawLogPins() {
+    logLayer.clearLayers();
+    state.log.forEach(function (e) {
+      var icon = L.divIcon({ className: "", iconSize: [24, 24], iconAnchor: [12, 22], html:
+        '<svg class="find-pin" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 23s7-7.2 7-12.5A7 7 0 0 0 5 10.5C5 15.8 12 23 12 23z" fill="' + (e.found ? "#8a4a1c" : "#6d7766") + '" stroke="#fff8f0" stroke-width="1.6"/><circle cx="12" cy="10.5" r="2.6" fill="#fff8f0"/></svg>' });
+      L.marker([e.lat, e.lon], { icon: icon, title: e.place || fmtDay(e.date) }).on("click", function () { openSpot(e.lat, e.lon); }).addTo(logLayer);
+    });
+    $("#logCount").textContent = state.log.length;
+  }
+  function saveLog() { store("log", state.log); drawLogPins(); }
+
+  async function renderLog(computeScores) {
+    var pane = $("#pane-log");
+    var list = state.log.slice().sort(function (a, b) { return a.date < b.date ? 1 : -1; });
+    var cp = paramsFor(state.species), baseSat = Object.assign({}, M.DEFAULTS, SP().params || {}).halfSat;
+    var cal = cp && (cp.lagShift || (cp.halfSat && cp.halfSat !== baseSat));
+    var nSp = state.log.filter(function (e) { return entrySpecies(e) === state.species; }).length;
+    pane.innerHTML =
+      '<div><h2>Mon carnet</h2><p class="muted small">Tes sorties servent à caler le modèle. Note aussi les sorties bredouilles : elles comptent autant que les trouvailles.</p></div>' +
+      '<div class="actions"><button type="button" class="btn primary" id="logHere">Noter une sortie</button></div>' +
+      (list.length ? "<div>" + list.map(function (e) {
+        return '<div class="entry" data-id="' + esc(e.id) + '"><span class="when">' + fmtDay(e.date, true) + " " + e.date.slice(0, 4) + '</span><span class="res ' + (e.found ? "found" : "none") + '">' + esc(amountLabel(e)) + "</span>" +
+          '<span class="where">' + esc(e.place || fmtCoord(e.lat, e.lon)) + ' <span class="muted small">· ' + esc(M.SPECIES[entrySpecies(e)].label) + (e.essence && e.essence !== "inconnu" ? " · " + esc(M.ESSENCES[e.essence].label) : "") + "</span></span><span></span>" +
+          (e.note ? '<span class="model">' + esc(e.note) + "</span>" : "") +
+          '<span class="model mono" data-model="' + esc(e.id) + '">Indice du modèle ce jour-là : …</span>' +
+          '<span class="entry-actions"><button type="button" data-act="show">Voir</button><button type="button" data-act="move">Déplacer</button><button type="button" data-act="edit">Modifier</button><button type="button" data-act="del">Supprimer</button></span></div>';
+      }).join("") + "</div>" : '<p class="muted">Aucune sortie pour l\'instant.</p>') +
+      '<div class="calib"><div class="label">Calage du modèle · ' + esc(SP().label) + '</div><p class="small" id="calibText">' +
+      (cal ? "Modèle calé sur ton carnet : délai " + (cp.lagShift > 0 ? "+" : "") + (cp.lagShift || 0) + " j, seuil de pluie " + fmtNum(cp.halfSat || baseSat, 0) + " mm." : "Modèle par défaut. Le calage ajuste le délai pluie → pousse, et le seuil de pluie dès que tu as au moins deux sorties bredouilles.") +
+      (nSp ? " Il utilise seulement " + (nSp === 1 ? "ta sortie notée" : "tes " + nSp + " sorties notées") + " pour cette espèce ; chaque espèce a son propre calage." : " Aucune sortie notée pour cette espèce pour l'instant ; chaque espèce a son propre calage.") +
+      '</p><div class="actions"><button type="button" class="btn" id="doCalib">Caler sur mon carnet</button>' + (cal ? '<button type="button" class="btn ghost" id="resetCalib">Revenir au modèle par défaut</button>' : "") + "</div></div>" +
+      '<div class="actions"><button type="button" class="btn ghost" id="exportLog">Exporter le carnet</button><label class="btn ghost" for="importLog">Importer</label><input type="file" id="importLog" accept="application/json,.json" hidden></div>' +
+      '<div class="calib"><div class="label">Sur ce téléphone</div><div id="storageInfo" class="small muted">Lecture…</div>' +
+      '<div class="actions"><button type="button" class="btn" id="protectBtn" hidden>Protéger mes données</button><button type="button" class="btn ghost" id="clearWx">Vider la météo en cache</button><button type="button" class="btn ghost" id="clearZones">Supprimer les zones hors ligne</button>' +
+      (hasLockKey() ? '<button type="button" class="btn ghost" id="lockBtn">Verrouiller sur ce téléphone</button>' : "") + "</div></div>";
+
+    $("#logHere").onclick = function () {
+      var c = state.me || state.spot || { lat: map.getCenter().lat, lon: map.getCenter().lng };
+      openForm({ lat: c.lat, lon: c.lon, found: true, essence: state.spot ? state.spot.essence : "inconnu", species: state.species });
+    };
+    pane.querySelectorAll(".entry-actions button").forEach(function (b) {
+      b.addEventListener("click", function () {
+        var id = b.closest(".entry").dataset.id, e = state.log.find(function (x) { return x.id === id; });
+        if (!e) return;
+        var act = b.dataset.act;
+        if (act === "show") { map.setView([e.lat, e.lon], Math.max(13, map.getZoom())); state.sel = e.date >= addDays(TODAY, -3) ? e.date : state.sel; drawCells(); openSpot(e.lat, e.lon); }
+        if (act === "move") startPlacing(e);
+        if (act === "edit") openForm(e);
+        if (act === "del") {
+          if (b.classList.contains("confirm")) { state.log = state.log.filter(function (x) { return x.id !== id; }); saveLog(); renderLog(false); toast("Sortie supprimée"); }
+          else { b.classList.add("confirm"); b.textContent = "Confirmer la suppression"; }
+        }
+      });
+    });
+    $("#doCalib").onclick = doCalibrate;
+    if ($("#resetCalib")) $("#resetCalib").onclick = function () { setParamsFor(state.species, {}); drawCells(); renderZones(); if (state.spot) renderSpot(); renderLog(false); toast("Modèle par défaut rétabli"); };
+    $("#exportLog").onclick = exportLog;
+    $("#importLog").onchange = importLog;
+    $("#protectBtn").onclick = function () { ensurePersist(true).then(renderStorage); };
+    $("#clearWx").onclick = function (ev) {
+      var b = ev.currentTarget;
+      if (!b.classList.contains("danger")) { b.classList.add("danger"); b.textContent = "Confirmer : vider la météo"; return; }
+      idb.clearWeather().then(function () {
+        Array.from(wx.keys()).forEach(function (k) { if (k.indexOf("e:") !== 0) wx.delete(k); });
+        toast("Météo en cache vidée"); renderLog(false); refreshGrid();
+      });
+    };
+    $("#clearZones").onclick = function (ev) {
+      var b = ev.currentTarget;
+      if (!b.classList.contains("danger")) { b.classList.add("danger"); b.textContent = "Confirmer : supprimer les zones"; return; }
+      (window.caches ? caches.delete(ZONE_CACHE) : Promise.resolve()).then(function () { store("zones", []); toast("Zones hors ligne supprimées"); renderLog(false); renderOffline(); });
+    };
+    if ($("#lockBtn")) $("#lockBtn").onclick = function () { try { localStorage.removeItem("cepometre.lockkey"); } catch (e) {} location.reload(); };
+    renderStorage();
+
+    if (computeScores !== false) {
+      for (var i = 0; i < list.length; i++) {
+        var e = list[i], span = pane.querySelector('[data-model="' + CSS.escape(e.id) + '"]');
+        if (!span) continue;
+        try {
+          var w = await weatherForEntry(e), k = w.days.date.indexOf(e.date);
+          if (k < 0) { span.textContent = "Indice du modèle : date hors des données"; continue; }
+          var tp = null; try { tp = await topoAt(e.lat, e.lon); } catch (x) {}
+          var esp = entrySpecies(e);
+          var sc = M.scoreSpotSpecies(w.days, k, esp, paramsFor(esp), { elevation: w.elevation, topo: tp, essence: e.essence }).score;
+          span.textContent = "Indice " + M.SPECIES[esp].short + " ce jour-là : " + sc + "/100 (" + verdict(sc).toLowerCase() + ")" +
+            (tp ? (tp.slope >= 3 ? " · versant " + M.aspectLabel(tp.aspect) + ", " + fmtNum(tp.slope, 0) + "°" : " · terrain plat") : "");
+        } catch (err) { span.textContent = "Indice du modèle : météo indisponible"; }
+      }
+    }
+  }
+
+  // L'exposition aide-t-elle ? On compare l'indice météo seul et l'indice avec le relief, sur tes sorties.
+  function expoReport(samples) {
+    var withT = samples.filter(function (s) { return s.topo && s.topo.slope >= 3; });
+    if (!withT.length) return "Effet de l'exposition : pas encore de sortie sur un versant en pente pour en juger.";
+    var avg = function (arr, f) { return arr.length ? arr.reduce(function (a, s) { return a + f(s); }, 0) / arr.length : null; };
+    var base = function (s) { return M.scoreSpecies(s.days, s.k, state.species, paramsFor(state.species), { elevation: s.elevation }).score; };
+    var expo = function (s) { var r = M.scoreSpecies(s.days, s.k, state.species, paramsFor(state.species), { elevation: s.elevation }); return M.withTopo(r.score, s.topo, r.parts.tMean5); };
+    var pos = withT.filter(function (s) { return s.found; }), neg = withT.filter(function (s) { return !s.found; });
+    var txt = "Effet de l'exposition sur " + withT.length + " sortie" + (withT.length > 1 ? "s" : "") + " en pente :";
+    if (pos.length) txt += " trouvailles " + Math.round(avg(pos, base)) + " → " + Math.round(avg(pos, expo));
+    if (neg.length) txt += (pos.length ? "," : "") + " bredouilles " + Math.round(avg(neg, base)) + " → " + Math.round(avg(neg, expo));
+    txt += " (sans → avec). ";
+    var gain = (pos.length ? avg(pos, expo) - avg(pos, base) : 0) - (neg.length ? avg(neg, expo) - avg(neg, base) : 0);
+    if (!pos.length || !neg.length) txt += "Il faudra des trouvailles et des sorties bredouilles en pente pour savoir si l'exposition améliore vraiment les prévisions.";
+    else txt += gain > 2 ? "L'exposition sépare mieux tes bons et tes mauvais jours : elle semble utile." : gain < -2 ? "Pour l'instant, l'exposition brouille plutôt les prévisions sur tes sorties." : "Pas de différence nette pour l'instant.";
+    return txt;
+  }
+
+  // Les cèpes gardent leur stockage d'origine (« params ») ; les autres espèces ont le leur.
+  function setParamsFor(key, prm) {
+    if (key === "cepes") { state.params = prm; store("params", prm); }
+    else { state.spParams[key] = prm; store("spParams", state.spParams); }
+  }
+
+  async function doCalibrate() {
+    var txt = $("#calibText"); txt.textContent = "Calage en cours…";
+    var samples = [];
+    var mine = state.log.filter(function (x) { return entrySpecies(x) === state.species; });
+    for (var i = 0; i < mine.length; i++) {
+      var e = mine[i];
+      try {
+        var w = await weatherForEntry(e), k = w.days.date.indexOf(e.date), tp = null;
+        try { tp = await topoAt(e.lat, e.lon); } catch (x) {}
+        if (k >= 0) samples.push({ days: w.days, k: k, elevation: w.elevation, found: !!e.found, topo: tp });
+      } catch (err) {}
+    }
+    if (!mine.length) { txt.textContent = "Aucune sortie notée pour « " + SP().label + " » : ajoute-en au carnet avant de caler."; return; }
+    if (!samples.length) { txt.textContent = "Impossible de récupérer la météo de tes sorties. Vérifie ta connexion."; return; }
+    var r = M.calibrateSpecies(samples, state.species);
+    setParamsFor(state.species, { lagShift: r.params.lagShift, halfSat: r.params.halfSat });
+    drawCells(); renderZones(); if (state.spot) renderSpot();
+    await renderLog(true);
+    $("#calibText").textContent = "Calé sur " + samples.length + " sortie" + (samples.length > 1 ? "s" : "") + " : délai " + (r.params.lagShift > 0 ? "+" : "") + r.params.lagShift + " j, seuil " + r.params.halfSat + " mm. Indice moyen les jours de trouvaille : " + Math.round(r.meanPos) + "/100" + (r.note ? ". " + r.note : ".") + " " + expoReport(samples);
+  }
+  function exportLog() {
+    var blob = new Blob([JSON.stringify({ app: "cepometre", version: 1, exported: new Date().toISOString(), params: state.params, spParams: state.spParams, log: state.log }, null, 2)], { type: "application/json" });
+    var a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "carnet-cepes-" + TODAY + ".json";
+    document.body.appendChild(a); a.click(); setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+  }
+  function importLog(ev) {
+    var f = ev.target.files[0]; if (!f) return;
+    f.text().then(function (t) {
+      var j = JSON.parse(t), incoming = Array.isArray(j) ? j : j.log;
+      if (!Array.isArray(incoming)) throw new Error("format");
+      var ids = new Set(state.log.map(function (e) { return e.id; })), added = 0;
+      incoming.forEach(function (e) { if (e && e.id && e.date && isFinite(e.lat) && isFinite(e.lon) && !ids.has(e.id)) { state.log.push(e); added++; } });
+      saveLog(); renderLog(true); toast(added + " sortie" + (added > 1 ? "s" : "") + " importée" + (added > 1 ? "s" : ""));
+    }).catch(function () { toast("Ce fichier n'est pas un carnet exporté par le Cèpomètre"); });
+  }
+
+  /* Formulaire d'une sortie */
+  function openForm(seed) {
+    var isEdit = !!seed.id, e = Object.assign({ date: TODAY, place: "", found: true, amount: "bien", essence: "inconnu", note: "" }, seed);
+    var essOpts = Object.keys(M.ESSENCES).filter(function (k) { return k !== "horsforet"; }).map(function (key) { return '<option value="' + key + '"' + (key === e.essence ? " selected" : "") + ">" + esc(M.ESSENCES[key].label) + "</option>"; }).join("");
+    var modal = $("#modal");
+    modal.innerHTML = '<form id="entryForm" novalidate><h2>' + (isEdit ? "Modifier la sortie" : e.found ? "Noter une trouvaille" : "Noter une sortie bredouille") + "</h2>" +
+      '<p class="label mono">' + fmtCoord(e.lat, e.lon) + "</p>" +
+      '<div class="two"><label class="field" for="fDate">Date<input type="date" id="fDate" value="' + e.date + '" max="' + TODAY + '" required></label>' +
+      '<label class="field" for="fFound">Résultat<select id="fFound"><option value="1"' + (e.found ? " selected" : "") + '>Trouvé</option><option value="0"' + (!e.found ? " selected" : "") + ">Bredouille</option></select></label></div>" +
+      '<div class="two"><label class="field" for="fAmount">Quantité<select id="fAmount">' + ["quelques-uns", "bien", "énorme"].map(function (a) { return '<option' + (a === e.amount ? " selected" : "") + ">" + a + "</option>"; }).join("") + "</select></label>" +
+      '<label class="field" for="fEss">Essence<select id="fEss">' + essOpts + "</select></label></div>" +
+      '<label class="field" for="fSp">Espèce<select id="fSp">' + M.SPECIES_ORDER.map(function (key) { return '<option value="' + key + '"' + (key === (e.species || "cepes") ? " selected" : "") + ">" + esc(M.SPECIES[key].label) + "</option>"; }).join("") + "</select></label>" +
+      '<label class="field" for="fPlace">Nom du coin (reste sur ton téléphone)<input type="text" id="fPlace" value="' + esc(e.place) + '" placeholder="Ex. : hêtraie au-dessus du chalet"></label>' +
+      '<label class="field" for="fNote">Note<textarea id="fNote" placeholder="Taille, état, autres espèces…">' + esc(e.note) + "</textarea></label>" +
+      '<div class="actions"><button type="submit" class="btn primary">' + (isEdit ? "Enregistrer" : "Ajouter au carnet") + '</button><button type="button" class="btn ghost" id="fCancel">Annuler</button></div></form>';
+    modal.hidden = false;
+    var syncAmount = function () { $("#fAmount").disabled = $("#fFound").value === "0"; };
+    $("#fFound").onchange = syncAmount; syncAmount();
+    $("#fCancel").onclick = function () { modal.hidden = true; };
+    modal.onclick = function (ev) { if (ev.target === modal) modal.hidden = true; };
+    $("#entryForm").onsubmit = function (ev) {
+      ev.preventDefault();
+      var d = $("#fDate").value || TODAY;
+      var rec = { id: e.id || ("e" + Date.now().toString(36)), date: d, lat: e.lat, lon: e.lon, place: $("#fPlace").value.trim(), found: $("#fFound").value === "1", amount: $("#fFound").value === "1" ? $("#fAmount").value : null, essence: $("#fEss").value, species: $("#fSp").value, note: $("#fNote").value.trim() };
+      if (isEdit) state.log = state.log.map(function (x) { return x.id === rec.id ? rec : x; }); else state.log.push(rec);
+      saveLog(); modal.hidden = true; showTab("log"); renderLog(true); toast(isEdit ? "Sortie modifiée" : "Ajouté au carnet");
+    };
+  }
+
+  function startPlacing(e) {
+    state.placingId = e.id;
+    var bar = $("#placing");
+    bar.innerHTML = "<span>Touche la carte à l'endroit exact</span><button type=\"button\" id=\"cancelPlace\">Annuler</button>";
+    bar.hidden = false;
+    map.setView([e.lat, e.lon], Math.max(map.getZoom(), 14));
+    if (window.innerWidth < 900) sheet.classList.remove("open");
+    $("#cancelPlace").onclick = function () { state.placingId = null; bar.hidden = true; };
+  }
+
+  /* ---------- Hors ligne et stockage ---------- */
+  // Clé de déverrouillage gardée par l'écran de mot de passe (version chiffrée seulement).
+  function hasLockKey() { try { return !!localStorage.getItem("cepometre.lockkey"); } catch (e) { return false; } }
+  var ZONE_CACHE = "cepometre-zones";
+  var WMTS_DEFS = {
+    plan: ["GEOGRAPHICALGRIDSYSTEMS.PLANIGNV2", "image/png", "PM", 18],
+    photo: ["ORTHOIMAGERY.ORTHOPHOTOS", "image/jpeg", "PM", 19],
+    forest: ["LANDCOVER.FORESTINVENTORY.V2", "image/png", "PM_6_16", 16]
+  };
+  // Même adresse, caractère pour caractère, que celle demandée par la carte (sinon le cache ne sert pas).
+  function wmtsUrl(d, z, x, y) {
+    return "https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=" + d[0] +
+      "&STYLE=normal&TILEMATRIXSET=" + d[2] + "&TILEMATRIX=" + z + "&TILEROW=" + y + "&TILECOL=" + x + "&FORMAT=" + d[1];
+  }
+  function lon2x(lon, z) { return Math.floor((lon + 180) / 360 * Math.pow(2, z)); }
+  function lat2y(lat, z) { var r = lat * Math.PI / 180; return Math.floor((1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2 * Math.pow(2, z)); }
+
+  async function ensurePersist(ask) {
+    try {
+      if (!navigator.storage || !navigator.storage.persist) return (state.persisted = null);
+      state.persisted = await navigator.storage.persisted();
+      if (!state.persisted && ask !== false) state.persisted = await navigator.storage.persist();
+    } catch (e) { state.persisted = null; }
+    return state.persisted;
+  }
+
+  async function saveZone() {
+    if (!window.caches) { toast("Ce navigateur ne permet pas de garder des cartes hors ligne"); return; }
+    var z = Math.max(8, map.getZoom()), b = map.getBounds(), urls = [];
+    var defs = [WMTS_DEFS.forest]; if (WMTS_DEFS[state.base]) defs.unshift(WMTS_DEFS[state.base]);
+    for (var zz = z; zz <= z + 3; zz++) defs.forEach(function (d) {
+      var zt = Math.min(zz, d[3]);
+      var x0 = lon2x(b.getWest(), zt), x1 = lon2x(b.getEast(), zt), y0 = lat2y(b.getNorth(), zt), y1 = lat2y(b.getSouth(), zt);
+      for (var x = x0; x <= x1; x++) for (var y = y0; y <= y1; y++) urls.push(wmtsUrl(d, zt, x, y));
+    });
+    urls = Array.from(new Set(urls));
+    if (urls.length > 2500) { $("#offlineInfo").textContent = "Zone trop grande (" + urls.length + " morceaux de carte) : zoome un peu et recommence."; return; }
+    var btn = $("#saveZone"); btn.disabled = true;
+    ensurePersist(true);
+    var cache = await caches.open(ZONE_CACHE), i = 0, done = 0, fail = 0;
+    $("#zoneProg").hidden = false;
+    async function worker() {
+      while (i < urls.length) {
+        var u = urls[i++];
+        try {
+          if (!(await cache.match(u))) { var r = await fetchWithTimeout(u, 20000); if (r.ok) await cache.put(u, r); else fail++; }
+        } catch (e) { fail++; }
+        done++;
+        if (done % 8 === 0 || done === urls.length) { $("#zoneBar").style.width = Math.round(100 * done / urls.length) + "%"; $("#offlineInfo").textContent = "Téléchargement : " + done + " sur " + urls.length + "…"; }
+      }
+    }
+    await Promise.all([worker(), worker(), worker(), worker(), worker()]);
+    var zones = load("zones", []);
+    zones.push({ date: TODAY, n: urls.length - fail, b: [b.getSouth(), b.getWest(), b.getNorth(), b.getEast()], z: z });
+    store("zones", zones);
+    $("#zoneProg").hidden = true; btn.disabled = false;
+    // La météo de la zone : celle de la grille affichée, déjà gardée 3 jours sur le téléphone.
+    refreshGrid();
+    renderOffline(fail ? fail + " morceaux n'ont pas pu être téléchargés : relance plus tard pour compléter." : "Zone gardée.");
+  }
+  function renderOffline(msg) {
+    var zones = load("zones", []);
+    var tiles = zones.reduce(function (s, z) { return s + (z.n || 0); }, 0);
+    $("#offlineInfo").textContent = (msg ? msg + " " : "") + (zones.length ? zones.length + " zone" + (zones.length > 1 ? "s" : "") + " gardée" + (zones.length > 1 ? "s" : "") + " · " + tiles + " morceaux de carte." : "Aucune zone gardée pour l'instant.");
+  }
+  async function renderStorage() {
+    var box = $("#storageInfo"); if (!box) return;
+    var persisted = await ensurePersist(false);
+    var nWx = await idb.count(), zones = load("zones", []), est = null;
+    try { est = navigator.storage && navigator.storage.estimate ? await navigator.storage.estimate() : null; } catch (e) {}
+    if (!$("#storageInfo")) return;
+    box.innerHTML = '<dl class="store-list">' +
+      "<dt>Sorties au carnet</dt><dd>" + state.log.length + "</dd>" +
+      "<dt>Points météo en mémoire</dt><dd>" + (nWx == null ? "?" : nWx) + "</dd>" +
+      "<dt>Zones hors ligne</dt><dd>" + zones.length + "</dd>" +
+      (est && est.usage != null ? "<dt>Espace utilisé</dt><dd>" + fmtNum(est.usage / 1048576, 1) + " Mo</dd>" : "") +
+      "<dt>Protection contre l'effacement</dt><dd>" + (persisted ? "oui" : persisted === false ? "non" : "inconnue") + "</dd></dl>" +
+      (persisted ? "" : '<p class="small muted" style="margin-top:8px">Sans protection, le navigateur peut effacer ces données s\'il manque de place. Installer l\'appli sur l\'écran d\'accueil aide Chrome à l\'accorder. Exporte ton carnet de temps en temps.</p>');
+    var pb = $("#protectBtn"); if (pb) pb.hidden = !!persisted || persisted === null;
+  }
+  $("#saveZone").onclick = saveZone;
+
+  /* ---------- Interactions carte ---------- */
+  map.on("click", function (ev) {
+    if (state.placingId) {
+      var id = state.placingId; state.placingId = null; $("#placing").hidden = true;
+      state.log = state.log.map(function (x) { if (x.id === id) { x.lat = +ev.latlng.lat.toFixed(5); x.lon = +ev.latlng.lng.toFixed(5); x.note = (x.note || "").replace(/\s*Position approximative[^.]*\./, "").trim(); } return x; });
+      saveLog(); showTab("log"); renderLog(true); toast("Position enregistrée");
+      return;
+    }
+    $("#layers").hidden = true; $("#btnLayers").setAttribute("aria-pressed", "false");
+    openSpot(+ev.latlng.lat.toFixed(5), +ev.latlng.lng.toFixed(5));
+  });
+  map.on("moveend", function () { scheduleRefresh(); renderDays(); });
+
+  $("#btnLayers").onclick = function () {
+    var p = $("#layers"); p.hidden = !p.hidden; this.setAttribute("aria-pressed", String(!p.hidden));
+    // Sur téléphone, on replie le volet du bas pour laisser la place aux réglages et voir la carte réagir.
+    if (!p.hidden && window.innerWidth < 900) sheet.classList.remove("open");
+  };
+  document.querySelectorAll("#baseSeg button").forEach(function (b) { b.onclick = function () { state.base = b.dataset.base; store("base", state.base); applyLayers(); }; });
+  $("#tgIndex").onchange = function (e) { state.showIndex = e.target.checked; store("showIndex", state.showIndex); applyLayers(); };
+  $("#tgForest").onchange = function (e) { state.showForest = e.target.checked; store("showForest", state.showForest); applyLayers(); };
+  $("#opForest").oninput = function (e) { state.forestOpacity = +e.target.value; store("forestOpacity", state.forestOpacity); applyLayers(); };
+  function setThr(v) { state.thr = v; store("thr", v); refreshColors(); }
+  var thrTimer = null;
+  $("#thr").oninput = function (e) {
+    state.thr = +e.target.value; $("#thrVal").textContent = state.thr; $("#tgStretch").disabled = state.thr === 0;
+    clearTimeout(thrTimer); thrTimer = setTimeout(function () { setThr(state.thr); }, 120);
+  };
+  $("#tgStretch").onchange = function (e) { state.stretch = e.target.checked; store("stretch", state.stretch); refreshColors(); };
+  $("#tgSmooth").onchange = function (e) { state.smooth = e.target.checked; store("smooth", state.smooth); applyLayers(); drawCells(); };
+  function refreshColors() { applyLayers(); drawCells(); renderZones(); if (state.spot) renderSpot(); }
+  document.querySelectorAll("#colSeg button").forEach(function (b) {
+    b.onclick = function () { state.colorMode = b.dataset.col; store("colorMode", state.colorMode); refreshColors(); };
+  });
+  $("#tgContour").onchange = function (e) { state.contours = e.target.checked; store("contours", state.contours); drawCells(); };
+  var opTimer = null;
+  $("#opIndex").oninput = function (e) {
+    state.idxOpacity = +e.target.value; clearTimeout(opTimer);
+    opTimer = setTimeout(function () { store("idxOpacity", state.idxOpacity); drawCells(); }, 120);
+  };
+  document.querySelectorAll("#fineSeg button").forEach(function (b) {
+    b.onclick = function () { state.fine = +b.dataset.fine; store("fine", state.fine); applyLayers(); refreshGrid(); };
+  });
+
+  $("#btnLocate").onclick = function () {
+    if (!navigator.geolocation) { toast("La localisation n'est pas disponible sur cet appareil"); return; }
+    toast("Recherche de ta position…");
+    navigator.geolocation.getCurrentPosition(function (pos) {
+      state.me = { lat: pos.coords.latitude, lon: pos.coords.longitude };
+      if (meMarker) map.removeLayer(meMarker);
+      meMarker = L.marker([state.me.lat, state.me.lon], { icon: L.divIcon({ className: "", html: '<div class="me-dot"></div>', iconSize: [16, 16], iconAnchor: [8, 8] }), interactive: false }).addTo(map);
+      map.setView([state.me.lat, state.me.lon], Math.max(map.getZoom(), 12));
+      renderZones();
+    }, function (err) {
+      toast(err.code === 1 ? "Autorise la localisation pour ce site dans ton navigateur" : "Position introuvable pour l'instant");
+    }, { enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 });
+  };
+
+  /* ---------- Choix de l'espèce ---------- */
+  (function fillSpecies() {
+    var groups = {}, html = "";
+    M.SPECIES_ORDER.forEach(function (key) { var g = M.SPECIES[key].group; (groups[g] = groups[g] || []).push(key); });
+    Object.keys(groups).forEach(function (g) {
+      html += '<optgroup label="' + esc(g) + '">' + groups[g].map(function (key) { return '<option value="' + key + '"' + (key === state.species ? " selected" : "") + ">" + esc(M.SPECIES[key].label) + "</option>"; }).join("") + "</optgroup>";
+    });
+    $("#spSel").innerHTML = html;
+  })();
+  function setSpecies(key) {
+    if (!M.SPECIES[key]) return;
+    state.species = key; store("species", key); $("#spSel").value = key;
+    drawCells(); renderZones(); setStatus();
+    if (state.spot) renderSpot();
+    if (state.tab === "log") renderLog(false);
+    toast("Carte : " + M.SPECIES[key].label);
+  }
+  $("#spSel").onchange = function (e) { setSpecies(e.target.value); };
+
+  /* ---------- Démarrage ---------- */
+  applyLayers();
+  drawLogPins();
+  renderDays();
+  renderZones();
+  renderSpot();
+  showTab("zones", window.innerWidth >= 900);
+  renderOffline();
+  ensurePersist(true);
+  setStatus();
+  loadServer().then(function () { applyLayers(); refreshGrid(); });
+
+  if ("serviceWorker" in navigator && location.protocol === "https:") {
+    navigator.serviceWorker.register("sw.js").catch(function () {});
+  }
+})();
+</script>
+</body>
+</html>

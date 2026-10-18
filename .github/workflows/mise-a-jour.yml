@@ -1,0 +1,59 @@
+name: Mise à jour du Cèpomètre
+
+# Deux passages par jour : 06 h 40 et 18 h 40, heure de Paris en été (04 h 40 et 16 h 40 UTC),
+# plus un passage à chaque modification du code.
+on:
+  schedule:
+    - cron: "40 4 * * *"
+    - cron: "40 16 * * *"
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+concurrency:
+  group: deploiement
+  cancel-in-progress: false
+
+jobs:
+  publier:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Chiffrer l'appli avec le mot de passe
+        env:
+          CEPO_PASSWORD: ${{ secrets.CEPO_PASSWORD }}
+        run: |
+          if [ -z "$CEPO_PASSWORD" ]; then echo "Secret CEPO_PASSWORD manquant."; exit 1; fi
+          node source/chiffrer.js "$CEPO_PASSWORD" site
+
+      - name: Récupérer la météo du 64 et du 65
+        env:
+          PREV_URL: https://vestra.fr/cepometre/data/wx.json
+        run: node scripts/meteo.mjs site/data/wx.json
+
+      - name: Vérifier le dossier de destination (protection de vestra.fr)
+        env:
+          DIR: ${{ secrets.OVH_FTP_DIR || './www/cepometre/' }}
+        run: |
+          case "$DIR" in
+            */cepometre/) echo "Destination : $DIR" ;;
+            *) echo "Refusé : la destination doit se terminer par /cepometre/ (reçu : $DIR)"; exit 1 ;;
+          esac
+
+      - name: Envoyer sur OVH (vestra.fr/cepometre)
+        uses: SamKirkland/FTP-Deploy-Action@v4.3.5
+        with:
+          server: ${{ secrets.OVH_FTP_HOST }}
+          username: ${{ secrets.OVH_FTP_USER }}
+          password: ${{ secrets.OVH_FTP_PASSWORD }}
+          protocol: ftps
+          local-dir: ./site/
+          server-dir: ${{ secrets.OVH_FTP_DIR || './www/cepometre/' }}
+          # Ne jamais vider le dossier distant d'un coup ; seuls les fichiers de cepometre/ sont synchronisés.
+          dangerous-clean-slate: false

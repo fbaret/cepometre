@@ -1,0 +1,17 @@
+{
+  "name": "Cèpomètre",
+  "short_name": "Cèpomètre",
+  "description": "Indice de pousse des cèpes calculé sur la pluie, les températures et les essences forestières.",
+  "lang": "fr",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#2f3d27",
+  "theme_color": "#2f3d27",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

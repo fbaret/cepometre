@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Cèpomètre</title>
+<meta name="robots" content="noindex, nofollow">
+<meta name="theme-color" content="#2f3d27">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png" type="image/png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=Young+Serif&display=swap">
+<style>
+/* Écran de déverrouillage : une carte centrée, l'appli s'ouvre à la place. */
+:root {
+  --bg: #2f3d27; --panel: #fbfcf8; --line: #d4dacb; --fg: #1d2419; --muted: #5d6855;
+  --accent: #8a4a1c; --accent-fg: #fff8f0; --err: #b3261e;
+  --font-display: "Young Serif", Georgia, "Times New Roman", serif;
+  --font-body: "Atkinson Hyperlegible", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { --bg: #0d120b; --panel: #181f15; --line: #2c3627; --fg: #e6ebdf; --muted: #9aa690; --accent: #d08a4f; --accent-fg: #1c0f05; --err: #ff8a80; color-scheme: dark; }
+}
+:root[data-theme="dark"] { --bg: #0d120b; --panel: #181f15; --line: #2c3627; --fg: #e6ebdf; --muted: #9aa690; --accent: #d08a4f; --accent-fg: #1c0f05; --err: #ff8a80; color-scheme: dark; }
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: var(--bg); color: var(--fg); font: 16px/1.45 var(--font-body);
+  display: grid; place-items: center;
+  padding-block: calc(env(safe-area-inset-top, 0px) + 24px) calc(env(safe-area-inset-bottom, 0px) + 24px);
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+form { width: min(360px, 100%); background: var(--panel); border-radius: 22px; padding: 26px 22px 22px; display: grid; gap: 14px; box-shadow: 0 10px 40px rgba(0,0,0,.3); }
+.head { display: flex; align-items: center; gap: 12px; }
+h1 { font: 26px/1.1 var(--font-display); margin: 0; }
+p { margin: 0; color: var(--muted); font-size: 14px; }
+label.pw { display: grid; gap: 6px; font-size: 14px; color: var(--muted); }
+.field { display: flex; gap: 6px; }
+input[type=password], input[type=text] { flex: 1; min-width: 0; padding: 12px; border-radius: 12px; border: 1px solid var(--line); background: transparent; color: var(--fg); font: inherit; }
+input:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.show { border: 1px solid var(--line); background: transparent; color: var(--muted); border-radius: 12px; padding: 0 12px; font: inherit; font-size: 13px; cursor: pointer; }
+.remember { display: flex; align-items: center; gap: 10px; font-size: 14px; }
+.remember input { width: 20px; height: 20px; accent-color: var(--accent); }
+.go { border: 0; border-radius: 12px; padding: 13px; background: var(--accent); color: var(--accent-fg); font: 700 16px var(--font-body); cursor: pointer; }
+.go:disabled { opacity: .7; cursor: progress; }
+.err { color: var(--err); font-size: 14px; font-weight: 700; }
+</style>
+</head>
+<body>
+<form id="f" autocomplete="on" hidden>
+  <div class="head">
+    <svg width="44" height="44" viewBox="0 0 64 64" aria-hidden="true">
+      <path d="M8 30c0-12 11-20 24-20s24 8 24 20c0 3-2 4-5 4H13c-3 0-5-1-5-4z" fill="#8a4a1c"/>
+      <path d="M22 34h20c1 8 3 14 3 19 0 4-6 6-13 6s-13-2-13-6c0-5 2-11 3-19z" fill="#efe3c8"/>
+      <path d="M24 40c4 1 12 1 16 0M23 46c5 1 13 1 18 0" stroke="#c9b48c" stroke-width="1.6" fill="none"/>
+    </svg>
+    <h1>Cèpomètre</h1>
+  </div>
+  <p>Appli privée. Entre le mot de passe pour l'ouvrir.</p>
+  <input type="text" name="username" value="cepometre" autocomplete="username" hidden>
+  <label class="pw" for="pw">Mot de passe
+    <span class="field"><input type="password" id="pw" autocomplete="current-password" required><button type="button" class="show" id="show" aria-pressed="false">Voir</button></span>
+  </label>
+  <label class="remember" for="rem"><input type="checkbox" id="rem" checked> Rester connecté sur ce téléphone</label>
+  <p class="err" id="err" role="alert" hidden></p>
+  <button type="submit" class="go" id="go">Ouvrir</button>
+</form>
+<script type="application/json" id="payload">__PAYLOAD__</script>
+<script>
+(function () {
+  "use strict";
+  var KEY = "cepometre.lockkey";
+  var P = JSON.parse(document.getElementById("payload").textContent);
+  var f = document.getElementById("f"), pw = document.getElementById("pw"), err = document.getElementById("err"), go = document.getElementById("go");
+  function b64(s) { var b = atob(s), a = new Uint8Array(b.length); for (var i = 0; i < b.length; i++) a[i] = b.charCodeAt(i); return a; }
+  function toB64(buf) { var a = new Uint8Array(buf), s = ""; for (var i = 0; i < a.length; i++) s += String.fromCharCode(a[i]); return btoa(s); }
+  function showForm(msg) { f.hidden = false; if (msg) { err.textContent = msg; err.hidden = false; } pw.focus(); }
+
+  if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("sw.js").catch(function () {});
+  if (!window.crypto || !crypto.subtle) { showForm("Ouvre l'appli en https pour pouvoir la déverrouiller."); return; }
+
+  async function decrypt(key) {
+    var pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv: b64(P.iv) }, key, b64(P.c));
+    return new TextDecoder().decode(pt);
+  }
+  function openApp(html) { document.open(); document.write(html); document.close(); }
+
+  async function tryStored() {
+    var raw = null; try { raw = localStorage.getItem(KEY); } catch (e) {}
+    if (!raw) return false;
+    try {
+      var key = await crypto.subtle.importKey("raw", b64(raw), "AES-GCM", false, ["decrypt"]);
+      openApp(await decrypt(key));
+      return true;
+    } catch (e) {
+      try { localStorage.removeItem(KEY); } catch (x) {}
+      return false;
+    }
+  }
+
+  f.addEventListener("submit", async function (ev) {
+    ev.preventDefault();
+    err.hidden = true; go.disabled = true; go.textContent = "Ouverture…";
+    try {
+      var base = await crypto.subtle.importKey("raw", new TextEncoder().encode(pw.value), "PBKDF2", false, ["deriveKey"]);
+      var key = await crypto.subtle.deriveKey({ name: "PBKDF2", salt: b64(P.s), iterations: P.it, hash: "SHA-256" }, base, { name: "AES-GCM", length: 256 }, true, ["decrypt"]);
+      var html = await decrypt(key);
+      if (document.getElementById("rem").checked) { try { localStorage.setItem(KEY, toB64(await crypto.subtle.exportKey("raw", key))); } catch (e) {} }
+      openApp(html);
+    } catch (e) {
+      go.disabled = false; go.textContent = "Ouvrir";
+      showForm("Mot de passe incorrect."); pw.select();
+    }
+  });
+  document.getElementById("show").addEventListener("click", function () {
+    var on = pw.type === "password"; pw.type = on ? "text" : "password"; this.textContent = on ? "Masquer" : "Voir"; this.setAttribute("aria-pressed", String(on));
+  });
+
+  // On attend que cet écran ait fini de charger : sinon l'appli ne remplacerait pas proprement la page
+  // (elle s'y ajouterait, ou ses scripts ne démarreraient pas).
+  function start() { setTimeout(function () { tryStored().then(function (ok) { if (!ok) showForm(); }); }, 0); }
+  if (document.readyState === "complete") start(); else window.addEventListener("load", start);
+})();
+</script>
+</body>
+</html>
