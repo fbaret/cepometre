@@ -6,13 +6,12 @@ jobs:
     steps:
       - run: |
           set +e
-          curl -sS -m 60 "https://data.geopf.fr/wfs/ows?SERVICE=WFS&VERSION=2.0.0&REQUEST=GetCapabilities" -o geo.xml
-          echo "::notice title=geopf::$(grep -oi '<Name>[^<]*\(publi\|onf\|foret\|forest\)[^<]*</Name>' geo.xml | tr '\n' ' ' | head -c 3000)"
-          curl -sS -m 60 "http://ws.carmencarto.fr/WFS/105/ONF_Forets?SERVICE=WFS&VERSION=1.1.0&REQUEST=GetCapabilities" -o car.xml; echo "carmen rc=$?"
-          echo "::notice title=carmen::$(wc -c < car.xml) o $(grep -o '<Name>[^<]*</Name>' car.xml | tr '\n' ' ' | head -c 1500)"
-          curl -sS -m 90 "http://ws.carmencarto.fr/WFS/105/ONF_Forets?SERVICE=WFS&VERSION=1.1.0&REQUEST=GetFeature&TYPENAME=ms:FOR_PUBL_FR&MAXFEATURES=2&BBOX=42.9,-1.2,43.1,-1.0,EPSG:4326" -o f.xml
-          echo "::notice title=carmen-feat::$(head -c 2500 f.xml | tr '\n' ' ')"
-          for L in FORETS.PUBLIQUES:forets_publiques FORETS.PUBLIQUES; do
-            curl -sS -m 60 "https://data.geopf.fr/wfs/ows?SERVICE=WFS&VERSION=2.0.0&REQUEST=GetFeature&TYPENAMES=$L&COUNT=2&OUTPUTFORMAT=application/json&BBOX=42.9,-1.2,43.1,-1.0,EPSG:4326" -o g.json
-            echo "::notice title=geopf-$L::$(head -c 2000 g.json | tr '\n' ' ')"
+          B="https://data.geopf.fr/wfs/ows?SERVICE=WFS&VERSION=2.0.0&REQUEST=GetFeature"
+          for L in ONF.FORETS_PUBLIQUES:ONF_FORETS_PUBLIQUES BDTOPO_V3:foret_publique; do
+            curl -sS -m 90 "$B&TYPENAMES=$L&RESULTTYPE=hits&BBOX=42.62,-1.80,43.66,0.70,urn:ogc:def:crs:EPSG::4326" -o h.xml
+            echo "::notice title=hits-$L::$(head -c 600 h.xml | tr '\n' ' ')"
+            curl -sS -m 90 "$B&TYPENAMES=$L&COUNT=3&OUTPUTFORMAT=application/json&BBOX=43.0,-1.15,43.1,-1.0,urn:ogc:def:crs:EPSG::4326" -o g.json
+            python3 -c "
+          import json;d=json.load(open('g.json'))
+          print('::notice title=feat-$L::'+' || '.join(json.dumps(f['properties'],ensure_ascii=False)+' geom='+f['geometry']['type']+' n='+str(len(json.dumps(f['geometry']))) for f in d['features']))" || echo "::notice title=raw-$L::$(head -c 800 g.json)"
           done
