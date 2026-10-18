@@ -284,7 +284,8 @@ def _post_alti(lats, lons):
     for attempt in range(6):
         try:
             req = urllib.request.Request(ALTI_URL, data=body, method="POST",
-                                         headers={"Content-Type": "application/json", "Accept": "application/json"})
+                                         headers={"Content-Type": "application/json", "Accept": "application/json",
+                                                  "User-Agent": "cepometre/1.0 (precalcul relief)"})
             with urllib.request.urlopen(req, timeout=120) as r:
                 z = json.load(r)["elevations"]
             if len(z) == len(lats):
@@ -352,9 +353,18 @@ def main():
     outdir = sys.argv[1] if len(sys.argv) > 1 else "static-cache"
     tmp_out = outdir + ".tmp"
     shutil.rmtree(tmp_out, ignore_errors=True)
-    with tempfile.TemporaryDirectory() as wd:
-        shp = download_bdforet(wd)
+    shp_dir = os.environ.get("SHP_DIR")
+    if shp_dir:   # archives déjà téléchargées et extraites par le workflow (curl + 7z)
+        shp = sorted(os.path.join(dp, f) for dp, _, fs in os.walk(shp_dir) for f in fs
+                     if f.upper().startswith("FORMATION_VEGETALE") and f.lower().endswith(".shp"))
+        log("Couches trouvées :", shp)
+        if not shp:
+            raise RuntimeError("aucun FORMATION_VEGETALE.shp dans " + shp_dir)
         cat, frac = forest_layer(shp)
+    else:
+        with tempfile.TemporaryDirectory() as wd:
+            shp = download_bdforet(wd)
+            cat, frac = forest_layer(shp)
     slope, aspect, nz = relief_layer()
     stats = dict(forest_cells=int((frac > 0).sum()), cells=int(cat.size), alti_points=nz,
                  cats={CATS[i]: int(n) for i, n in enumerate(np.bincount(cat.ravel(), minlength=len(CATS)))})
