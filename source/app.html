@@ -1477,7 +1477,9 @@ button { cursor: pointer; }
         (mo != null ? ", " + moLab + " entre 3 et 9 cm (" + fmtNum(mo * 100, 0) + " % d'eau)" : "") + ". Indicatif, ce n'est pas encore pris en compte dans l'indice."]);
     }
     facts.push(["∠", topoSentence(sp, res.expo, p.tMean5)]);
-    facts.push(["≈", "Saison : " + (p.seasonF >= 0.9 ? "pleine saison" : p.seasonF >= 0.5 ? "saison possible" : "hors saison") + (sp.elevation > 900 ? ", en altitude la saison finit plus tôt" : "") + "."]);
+    var shiftD = Math.round(p.seasonShift || 0), late = new Date(state.sel + "T12:00:00").getMonth() >= 8;
+    facts.push(["≈", "Saison : <strong>" + (p.seasonF >= 0.9 ? "pleine saison" : p.seasonF >= 0.5 ? (late ? "fin de saison" : "début de saison") : "hors saison") + "</strong>" +
+      (shiftD >= 5 ? " (à " + fmtNum(sp.elevation, 0) + " m, le calendrier a environ " + (shiftD >= 14 ? Math.round(shiftD / 7) + " semaines" : shiftD + " jours") + " d'avance sur la plaine : la pousse y commence et s'y arrête plus tôt)" : "") + "."]);
     if (peak && peak.s >= 40 && state.sel <= TODAY) facts.push(["→", "Prochain pic prévu : <strong>" + verdict(peak.s).toLowerCase() + " vers le " + fmtDay(peak.d, true) + "</strong> (" + peak.s + "/100)."]);
 
     var essOpts = Object.keys(M.ESSENCES).map(function (key) { return '<option value="' + key + '"' + (key === sp.essence ? " selected" : "") + ">" + esc(M.ESSENCES[key].label) + "</option>"; }).join("");
@@ -1654,10 +1656,10 @@ button { cursor: pointer; }
     if (!mine.length) { txt.textContent = "Aucune sortie notée pour « " + SP().label + " » : ajoute-en au carnet avant de caler."; return; }
     if (!samples.length) { txt.textContent = "Impossible de récupérer la météo de tes sorties. Vérifie ta connexion."; return; }
     var r = M.calibrateSpecies(samples, state.species);
-    setParamsFor(state.species, { lagShift: r.params.lagShift, halfSat: r.params.halfSat });
+    setParamsFor(state.species, { lagShift: r.params.lagShift, halfSat: r.params.halfSat, altShift: r.params.altShift });
     drawCells(); renderZones(); if (state.spot) renderSpot();
     await renderLog(true);
-    $("#calibText").textContent = "Calé sur " + samples.length + " sortie" + (samples.length > 1 ? "s" : "") + " : délai " + (r.params.lagShift > 0 ? "+" : "") + r.params.lagShift + " j, seuil " + r.params.halfSat + " mm. Indice moyen les jours de trouvaille : " + Math.round(r.meanPos) + "/100" + (r.note ? ". " + r.note : ".") + " " + expoReport(samples);
+    $("#calibText").textContent = "Calé sur " + samples.length + " sortie" + (samples.length > 1 ? "s" : "") + " : délai " + (r.params.lagShift > 0 ? "+" : "") + r.params.lagShift + " j, seuil " + r.params.halfSat + " mm" + (r.fitted.indexOf("altShift") >= 0 ? ", avance en altitude " + r.params.altShift + " j par 100 m" : "") + ". Indice moyen les jours de trouvaille : " + Math.round(r.meanPos) + "/100" + (r.note ? ". " + r.note : ".") + " " + expoReport(samples);
   }
   function exportLog() {
     var blob = new Blob([JSON.stringify({ app: "cepometre", version: 1, exported: new Date().toISOString(), params: state.params, spParams: state.spParams, log: state.log }, null, 2)], { type: "application/json" });

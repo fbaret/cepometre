@@ -23,7 +23,10 @@
     tLow: 10,         // plage de température moyenne idéale (°C)
     tHigh: 20,
     tColdZero: 3,     // en dessous, presque plus rien
-    tHotZero: 27
+    tHotZero: 27,
+    altShift: 3.5,    // jours d'avance du calendrier par 100 m au-dessus de altFrom
+    altFrom: 300,
+    altCap: 50        // avance maximale (jours)
   };
 
   // Poids par essence dominante (catégories simplifiées de la BD Forêt).
@@ -60,32 +63,26 @@
     return "inconnu";
   }
 
-  // Saison : poids par mois, avec une fin de saison plus précoce en altitude.
+  /* Saison : poids par mois (cèpes de plaine), interpolés au jour près.
+   * En altitude, tout le calendrier avance : la pousse commence plus tôt l'été et finit plus tôt
+   * l'automne, parce que le sol se refroidit plus vite. Avance = altShift jours par 100 m au-dessus
+   * de altFrom (3,5 j par défaut : environ 4 semaines à 1 100 m, 5 semaines à 1 300 m). */
   var MONTH_W = [0.05, 0.03, 0.05, 0.1, 0.3, 0.6, 0.5, 0.6, 0.9, 1.0, 0.75, 0.2];
-  function seasonFactor(dateStr, elevation) {
-    var m = +dateStr.slice(5, 7) - 1, d = +dateStr.slice(8, 10);
-    var w = MONTH_W[m];
+  function seasonShift(elevation, p) {
+    p = p || DEFAULTS;
     var el = elevation || 0;
-    if (el > 900) {
-      // En montagne : ça démarre plus tôt (août) et s'arrête plus tôt (novembre).
-      if (m === 7) w = 0.85;
-      if (m === 10) w = d < 10 ? 0.6 : 0.3;
-      if (m === 11) w = 0.03;
-    }
-    return w;
+    return Math.max(0, Math.min(p.altCap, (el - p.altFrom) / 100 * p.altShift));
   }
-
-  // Calendrier d'une espèce : 12 poids mensuels, interpolés au jour près (milieu de mois).
-  // En altitude (plus de 900 m), tout arrive environ 20 jours plus tôt en automne.
-  function seasonFromMonths(months, dateStr, elevation) {
+  function seasonFromMonths(months, dateStr, elevation, p) {
     var d = new Date(dateStr + "T12:00:00");
-    if ((elevation || 0) > 900) d.setDate(d.getDate() + 20);
+    d.setDate(d.getDate() + Math.round(seasonShift(elevation, p)));
     var m = d.getMonth(), day = d.getDate(), dim = new Date(d.getFullYear(), m + 1, 0).getDate();
     var pos = m + (day - 1) / dim - 0.5;              // en mois, 0 = mi-janvier
     var m0 = Math.floor(pos), f = pos - m0;
     var a = months[(m0 + 12) % 12], b = months[(m0 + 13) % 12];
     return a + (b - a) * f;
   }
+  function seasonFactor(dateStr, elevation, p) { return seasonFromMonths(MONTH_W, dateStr, elevation, p); }
   function altitudeFactor(el, altMin, altMax) {
     if (el == null || (altMin == null && altMax == null)) return 1;
     if (altMax != null && el > altMax) return Math.max(0, 1 - (el - altMax) / 400);
@@ -142,7 +139,7 @@
     var tempF = tempFactor(tm5, p) * Math.pow(p.frostPenalty || 0.5, frost);
 
     // Saison : calendrier propre à l'espèce s'il est fourni, sinon celui des cèpes.
-    var seasonF = opts.months ? seasonFromMonths(opts.months, days.date[k], opts.elevation) : seasonFactor(days.date[k], opts.elevation);
+    var seasonF = opts.months ? seasonFromMonths(opts.months, days.date[k], opts.elevation, p) : seasonFactor(days.date[k], opts.elevation, p);
 
     // Pluie tombée récemment (7 derniers jours), utile pour annoncer la suite.
     var recent = 0;
@@ -162,7 +159,7 @@
         effRain: eff, rainF: rainF, mu: mu, tLag: tLag,
         tMean5: tm5, frost: frost, tempF: tempF,
         seasonF: seasonF, recentRain: recent, trigger: best,
-        tLow: p.tLow, tHigh: p.tHigh, altF: altF, moistF: moistF
+        tLow: p.tLow, tHigh: p.tHigh, altF: altF, moistF: moistF, seasonShift: seasonShift(opts.elevation, p)
       }
     };
   }
@@ -306,21 +303,25 @@
     if (!pos.length) return { params: base, fitted: [], note: "Ajoute au moins une trouvaille." };
     var shifts = [-4, -3, -2, -1, 0, 1, 2, 3, 4];
     var sats = neg.length >= 2 ? [12, 16, 22, 30, 40, 55] : [base.halfSat];
+    var els = samples.map(function (s) { return s.elevation || 0; });
+    var altOk = neg.length >= 2 && Math.max.apply(null, els) - Math.min.apply(null, els) >= 400;
+    var alts = altOk ? [0, 2, 3.5, 5, 7] : [base.altShift];
     var bestScore = -Infinity, best = null;
     shifts.forEach(function (sh) {
-      sats.forEach(function (hs) {
-        var p = Object.assign({}, base, { lagShift: sh, halfSat: hs });
+      sats.forEach(function (hs) { alts.forEach(function (as) {
+        var p = Object.assign({}, base, { lagShift: sh, halfSat: hs, altShift: as });
         var sp = mean(pos.map(function (s) { return scoreDay(s.days, s.k, p, so(s)).score; }));
         var sn = neg.length ? mean(neg.map(function (s) { return scoreDay(s.days, s.k, p, so(s)).score; })) : 0;
         // Petite pénalité pour rester près des valeurs par défaut.
-        var obj = sp - sn - 1.5 * Math.abs(sh) - 0.05 * Math.abs(hs - centerSat);
-        if (obj > bestScore) { bestScore = obj; best = { lagShift: sh, halfSat: hs, meanPos: sp, meanNeg: sn }; }
-      });
+        var obj = sp - sn - 1.5 * Math.abs(sh) - 0.05 * Math.abs(hs - centerSat) - 0.8 * Math.abs(as - base.altShift);
+        if (obj > bestScore) { bestScore = obj; best = { lagShift: sh, halfSat: hs, altShift: as, meanPos: sp, meanNeg: sn }; }
+      }); });
     });
     var fitted = ["lagShift"];
     if (sats.length > 1) fitted.push("halfSat");
+    if (alts.length > 1) fitted.push("altShift");
     return {
-      params: Object.assign({}, base, { lagShift: best.lagShift, halfSat: best.halfSat }),
+      params: Object.assign({}, base, { lagShift: best.lagShift, halfSat: best.halfSat, altShift: best.altShift }),
       fitted: fitted,
       meanPos: best.meanPos, meanNeg: best.meanNeg,
       note: neg.length >= 2 ? "" : "Ajoute aussi tes sorties bredouilles : sans elles, seul le délai peut être calé."
@@ -330,7 +331,7 @@
   root.CepeModel = {
     DEFAULTS: DEFAULTS, ESSENCES: ESSENCES,
     classifyEssence: classifyEssence, scoreDay: scoreDay, scoreSeries: scoreSeries,
-    withEssence: withEssence, seasonFactor: seasonFactor, calibrate: calibrate,
+    withEssence: withEssence, seasonFactor: seasonFactor, seasonShift: seasonShift, calibrate: calibrate,
     exposureFactor: exposureFactor, withTopo: withTopo, scoreSpot: scoreSpot, aspectLabel: aspectLabel,
     SPECIES: SPECIES, SPECIES_ORDER: SPECIES_ORDER, scoreSpecies: scoreSpecies, scoreSpotSpecies: scoreSpotSpecies,
     withSpeciesEssence: withSpeciesEssence, calibrateSpecies: calibrateSpecies
