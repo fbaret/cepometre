@@ -46,14 +46,14 @@ jobs:
             *) echo "Refusé : la destination doit se terminer par /cepometre/ (reçu : $DIR)"; exit 1 ;;
           esac
 
-      - name: Envoyer sur OVH (vestra.fr/cepometre)
-        uses: SamKirkland/FTP-Deploy-Action@v4.3.5
-        with:
-          server: ${{ secrets.OVH_FTP_HOST }}
-          username: ${{ secrets.OVH_FTP_USER }}
-          password: ${{ secrets.OVH_FTP_PASSWORD }}
-          protocol: ftps
-          local-dir: ./site/
-          server-dir: ${{ secrets.OVH_FTP_DIR || './www/cepometre/' }}
-          # Ne jamais vider le dossier distant d'un coup ; seuls les fichiers de cepometre/ sont synchronisés.
-          dangerous-clean-slate: false
+      - name: Envoyer sur OVH en SFTP (vestra.fr/cepometre)
+        env:
+          HOST: ${{ secrets.OVH_FTP_HOST }}
+          USER: ${{ secrets.OVH_FTP_USER }}
+          PASS: ${{ secrets.OVH_FTP_PASSWORD }}
+          DIR: ${{ secrets.OVH_FTP_DIR || './www/cepometre/' }}
+        run: |
+          sudo apt-get install -y -qq lftp > /dev/null
+          D="${DIR#./}"; D="${D%/}"
+          # mirror -R : copie site/ vers le dossier distant ; --delete n'efface que ce qui est DANS ce dossier.
+          lftp -u "$USER,$PASS" "sftp://$HOST" -e "set sftp:auto-confirm yes; set net:max-retries 3; mkdir -p -f $D; mirror -R --delete --verbose --parallel=4 site $D; bye"
