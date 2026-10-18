@@ -24,7 +24,10 @@
     tHigh: 20,
     tColdZero: 3,     // en dessous, presque plus rien
     tHotZero: 27,
-    altShift: 3.5,    // jours d'avance du calendrier par 100 m au-dessus de altFrom
+    soilMargin: 2,    // sol : poussée pleine à partir de tLow + soilMargin, nulle sous tColdZero + soilMargin (°C)
+    soilTau: 6,       // inertie du sol (jours)
+    soilShift: 0,     // réglage du seuil de sol (°C), calable sur le carnet
+    altShift: 0,      // ancien calendrier avancé en altitude : désactivé, la température du sol s'en charge
     altFrom: 300,
     altCap: 50        // avance maximale (jours)
   };
@@ -92,11 +95,28 @@
 
   function mean(a) { var s = 0; for (var i = 0; i < a.length; i++) s += a[i]; return a.length ? s / a.length : NaN; }
 
-  function tempFactor(tmean, p) {
+  /* Chaleur : moyenne de l'air sur 5 jours ; au-delà de tHigh, la pousse ralentit. */
+  function heatFactor(tmean, p) {
     if (isNaN(tmean)) return 0.5;
-    if (tmean >= p.tLow && tmean <= p.tHigh) return 1;
-    if (tmean < p.tLow) return Math.max(0.05, (tmean - p.tColdZero) / (p.tLow - p.tColdZero));
+    if (tmean <= p.tHigh) return 1;
     return Math.max(0.1, (p.tHotZero - tmean) / (p.tHotZero - p.tHigh));
+  }
+  /* Froid : température du sol estimée. Le sol suit l'air avec retard (moyenne glissante sur
+   * environ soilTau jours) et les nuits comptent double, car il se refroidit surtout la nuit :
+   * valeur du jour = (2 × minimale + maximale) / 3. En altitude, l'air plus froid donne
+   * naturellement un sol plus froid : c'est ainsi que la saison s'y arrête plus tôt. */
+  function soilTemp(days, k, dT) {
+    var a = 1 / DEFAULTS.soilTau, s = null;
+    for (var i = 0; i <= k; i++) {
+      var v = (2 * days.tmin[i] + days.tmax[i]) / 3 + (dT || 0);
+      s = s == null ? v : s + a * (v - s);
+    }
+    return s;
+  }
+  function soilFactor(soilT, p) {
+    var hi = p.tLow + p.soilMargin + (p.soilShift || 0), lo = p.tColdZero + p.soilMargin + (p.soilShift || 0);
+    if (soilT >= hi) return 1;
+    return Math.max(0.05, (soilT - lo) / (hi - lo));
   }
 
   /* Calcule le score pour le jour d'index k.
@@ -106,9 +126,10 @@
     opts = opts || {};
     if (k < 0 || k >= days.date.length) return null;
 
+    var dT = opts.dT || 0;      // décalage de température (correction d'altitude d'un pixel de la carte)
     // Température moyenne des 14 jours précédents, pour fixer le délai.
     var t14 = [];
-    for (var i = Math.max(0, k - 14); i < k; i++) t14.push((days.tmin[i] + days.tmax[i]) / 2);
+    for (var i = Math.max(0, k - 14); i < k; i++) t14.push((days.tmin[i] + days.tmax[i]) / 2 + dT);
     var tLag = t14.length ? mean(t14) : 15;
     var mu = Math.min(p.lagMax, Math.max(p.lagMin, p.lagBase + (15 - tLag) * p.lagPerDeg + (p.lagShift || 0)));
 
@@ -132,11 +153,12 @@
     // Conditions des 5 derniers jours : douceur et gel.
     var t5 = [], frost = 0;
     for (var q = Math.max(0, k - 4); q <= k; q++) {
-      t5.push((days.tmin[q] + days.tmax[q]) / 2);
-      if (days.tmin[q] <= 0) frost++;
+      t5.push((days.tmin[q] + days.tmax[q]) / 2 + dT);
+      if (days.tmin[q] + dT <= 0) frost++;
     }
     var tm5 = mean(t5);
-    var tempF = tempFactor(tm5, p) * Math.pow(p.frostPenalty || 0.5, frost);
+    var soilT = soilTemp(days, k, dT), soilF = soilFactor(soilT, p), heatF = heatFactor(tm5, p);
+    var tempF = heatF * soilF * Math.pow(p.frostPenalty || 0.5, frost);
 
     // Saison : calendrier propre à l'espèce s'il est fourni, sinon celui des cèpes.
     var seasonF = opts.months ? seasonFromMonths(opts.months, days.date[k], opts.elevation, p) : seasonFactor(days.date[k], opts.elevation, p);
@@ -159,7 +181,9 @@
         effRain: eff, rainF: rainF, mu: mu, tLag: tLag,
         tMean5: tm5, frost: frost, tempF: tempF,
         seasonF: seasonF, recentRain: recent, trigger: best,
-        tLow: p.tLow, tHigh: p.tHigh, altF: altF, moistF: moistF, seasonShift: seasonShift(opts.elevation, p)
+        tLow: p.tLow, tHigh: p.tHigh, altF: altF, moistF: moistF, seasonShift: seasonShift(opts.elevation, p),
+        soilT: soilT, soilF: soilF, heatF: heatF,
+        soilFull: p.tLow + p.soilMargin + (p.soilShift || 0), soilZero: p.tColdZero + p.soilMargin + (p.soilShift || 0)
       }
     };
   }
@@ -305,23 +329,23 @@
     var sats = neg.length >= 2 ? [12, 16, 22, 30, 40, 55] : [base.halfSat];
     var els = samples.map(function (s) { return s.elevation || 0; });
     var altOk = neg.length >= 2 && Math.max.apply(null, els) - Math.min.apply(null, els) >= 400;
-    var alts = altOk ? [0, 2, 3.5, 5, 7] : [base.altShift];
+    var alts = altOk ? [-2, -1, 0, 1, 2, 3] : [base.soilShift || 0];
     var bestScore = -Infinity, best = null;
     shifts.forEach(function (sh) {
       sats.forEach(function (hs) { alts.forEach(function (as) {
-        var p = Object.assign({}, base, { lagShift: sh, halfSat: hs, altShift: as });
+        var p = Object.assign({}, base, { lagShift: sh, halfSat: hs, soilShift: as });
         var sp = mean(pos.map(function (s) { return scoreDay(s.days, s.k, p, so(s)).score; }));
         var sn = neg.length ? mean(neg.map(function (s) { return scoreDay(s.days, s.k, p, so(s)).score; })) : 0;
         // Petite pénalité pour rester près des valeurs par défaut.
-        var obj = sp - sn - 1.5 * Math.abs(sh) - 0.05 * Math.abs(hs - centerSat) - 0.8 * Math.abs(as - base.altShift);
-        if (obj > bestScore) { bestScore = obj; best = { lagShift: sh, halfSat: hs, altShift: as, meanPos: sp, meanNeg: sn }; }
+        var obj = sp - sn - 1.5 * Math.abs(sh) - 0.05 * Math.abs(hs - centerSat) - 0.8 * Math.abs(as - (base.soilShift || 0));
+        if (obj > bestScore) { bestScore = obj; best = { lagShift: sh, halfSat: hs, soilShift: as, meanPos: sp, meanNeg: sn }; }
       }); });
     });
     var fitted = ["lagShift"];
     if (sats.length > 1) fitted.push("halfSat");
-    if (alts.length > 1) fitted.push("altShift");
+    if (alts.length > 1) fitted.push("soilShift");
     return {
-      params: Object.assign({}, base, { lagShift: best.lagShift, halfSat: best.halfSat, altShift: best.altShift }),
+      params: Object.assign({}, base, { lagShift: best.lagShift, halfSat: best.halfSat, soilShift: best.soilShift }),
       fitted: fitted,
       meanPos: best.meanPos, meanNeg: best.meanNeg,
       note: neg.length >= 2 ? "" : "Ajoute aussi tes sorties bredouilles : sans elles, seul le délai peut être calé."
@@ -331,7 +355,7 @@
   root.CepeModel = {
     DEFAULTS: DEFAULTS, ESSENCES: ESSENCES,
     classifyEssence: classifyEssence, scoreDay: scoreDay, scoreSeries: scoreSeries,
-    withEssence: withEssence, seasonFactor: seasonFactor, seasonShift: seasonShift, calibrate: calibrate,
+    withEssence: withEssence, seasonFactor: seasonFactor, seasonShift: seasonShift, soilTemp: soilTemp, calibrate: calibrate,
     exposureFactor: exposureFactor, withTopo: withTopo, scoreSpot: scoreSpot, aspectLabel: aspectLabel,
     SPECIES: SPECIES, SPECIES_ORDER: SPECIES_ORDER, scoreSpecies: scoreSpecies, scoreSpotSpecies: scoreSpotSpecies,
     withSpeciesEssence: withSpeciesEssence, calibrateSpecies: calibrateSpecies

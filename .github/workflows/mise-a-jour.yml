@@ -33,19 +33,24 @@ jobs:
           node source/chiffrer.js "$CEPO_PASSWORD" site
 
       # Météo : seulement lors des passages planifiés (ou à la demande). Une modification du code
-      # reprend le dernier fichier publié, pour ne pas consommer le quota d'Open-Meteo.
+      # reprend la dernière météo BRUTE publiée (wx-raw.json), sans consommer le quota d'Open-Meteo.
+      # Les corrections par les stations repartent toujours du brut : jamais de double correction.
       - name: Récupérer la météo du 64 et du 65
         env:
-          PREV_URL: https://vestra.fr/cepometre/data/wx.json
+          SITE: https://vestra.fr/cepometre/data
+          PREV_URL: https://vestra.fr/cepometre/data/wx-raw.json
         run: |
           mkdir -p site/data
-          if [ "${{ github.event_name }}" = "push" ] && curl -fsSL "$PREV_URL" -o site/data/wx.json; then
-            echo "Modification du code : météo reprise du dernier passage."
+          if [ "${{ github.event_name }}" = "push" ] && curl -fsSL "$SITE/wx-raw.json" -o site/data/wx-raw.json; then
+            echo "Modification du code : météo brute reprise du dernier passage."
+          elif [ "${{ github.event_name }}" = "push" ] && curl -fsSL "$SITE/wx.json" -o site/data/wx-raw.json; then
+            echo "Modification du code : pas encore de météo brute publiée, reprise de wx.json."
           else
-            node scripts/meteo.mjs site/data/wx.json
+            node scripts/meteo.mjs site/data/wx-raw.json
           fi
+          cp site/data/wx-raw.json site/data/wx.json
 
-      - name: Corriger la pluie avec les pluviomètres Météo-France
+      - name: Corriger pluie et températures avec les stations Météo-France
         continue-on-error: true
         run: node scripts/pluvio.mjs site/data/wx.json
 

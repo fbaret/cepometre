@@ -7,7 +7,7 @@ Deux fois par jour, GitHub récupère la météo (Open-Meteo, modèles Météo-F
 ## Mise en ligne
 
 L'appli est publiée sur **https://vestra.fr/cepometre/** (hébergement OVH, dossier `www/cepometre`).
-La tâche « Mise à jour du Cèpomètre » (GitHub Actions) chiffre l'appli, récupère la météo puis envoie le tout par FTPS,
+La tâche « Mise à jour du Cèpomètre » (GitHub Actions) chiffre l'appli, récupère la météo puis envoie le tout par SFTP,
 à chaque modification du code et deux fois par jour (vers 6 h 40 et 18 h 40).
 
 Secrets du dépôt : `CEPO_PASSWORD`, `OVH_FTP_HOST`, `OVH_FTP_USER`, `OVH_FTP_PASSWORD` (et `OVH_FTP_DIR` si le site n'est pas dans `www`).
@@ -23,6 +23,15 @@ Le dépôt est privé. La météo publiée (`data/wx.json`) est lisible par tous
 
 `scripts/statique.py` précalcule, une seule fois, une grille de 250 m sur le 64 et le 65 : essence dominante et part de forêt (BD Forêt V2 de l'IGN, 44 000 polygones), pente et exposition (altimétrie IGN). Le résultat (`data/static.json` + `static.bin.gz`, environ 600 Ko) est gardé dans le cache de GitHub et n'est recalculé que si le script change. La carte multiplie la météo par ces poids ; la case « Tenir compte des arbres et de l'exposition » permet de revenir à la météo seule.
 
+## Fiabilisation de la météo
+
+- `scripts/meteo.mjs` écarte les valeurs impossibles, bouche les trous de température d'un jour sur l'autre, et reprend du passage précédent les points qu'Open-Meteo n'a pas servis. Il publie le fichier brut `data/wx-raw.json`.
+- `scripts/pluvio.mjs` recale ensuite pluie et températures sur les stations Météo-France (fichiers quotidiens du 64, 65, 40, 32 et 31) et écrit `data/wx.json`. Il écarte les mesures marquées douteuses, les valeurs absurdes et les pluviomètres restés à sec quand leurs voisins ont pris plus de 15 mm. Les températures sont comparées après mise à l'altitude de la station, et la correction est bornée à ±4 °C. La correction repart toujours du fichier brut, jamais d'un fichier déjà corrigé.
+
+## Altitude et température
+
+L'appli ne pondère pas l'altitude par un calendrier : elle ramène la température de chaque case de 250 m à son altitude IGN (−0,65 °C par 100 m) et estime la température du sol (moyenne lissée sur environ 6 jours). En dessous de 12 °C au sol, la pousse ralentit ; elle s’arrête presque vers 5 °C. Le carnet peut décaler ces seuils de quelques degrés s'il contient des sorties à différentes altitudes.
+
 ## Budget Open-Meteo
 
 Seuls les passages planifiés (6 h 40 et 18 h 40) et les lancements manuels interrogent Open-Meteo. Une modification du code reprend la dernière météo publiée.
@@ -36,6 +45,9 @@ Seuls les passages planifiés (6 h 40 et 18 h 40) et les lancements manuels inte
 - `source/verrou.html`, `source/chiffrer.js`, `source/sel.txt` : écran de mot de passe et chiffrement.
 - `source/sw.js`, `manifest.webmanifest`, icônes : installation et hors-ligne.
 - `scripts/meteo.mjs` : récupération de la météo, grille adaptative.
+- `scripts/pluvio.mjs` : recalage sur les stations Météo-France.
+- `scripts/statique.py` : forêts, pente, exposition et altitude (grille 250 m).
+- `scripts/diagnostic.mjs` : bilan par altitude et points témoins (annotations GitHub).
 - `.github/workflows/mise-a-jour.yml` : la tâche planifiée.
 
-Données : Open-Meteo (CC-BY 4.0), IGN Géoplateforme (Plan IGN, photos aériennes, BD Forêt V2, altimétrie), OpenTopoMap.
+Données : Open-Meteo (CC-BY 4.0), Météo-France (données publiques, licence ouverte Etalab), IGN Géoplateforme (Plan IGN, photos aériennes, BD Forêt V2, altimétrie), OpenTopoMap.

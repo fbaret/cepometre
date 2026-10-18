@@ -866,7 +866,7 @@ button { cursor: pointer; }
       pts.set("g:" + p[0] + "," + p[1], { i: p[0], j: p[1], lat: +(p[0] * LAT_B).toFixed(5), lon: +(p[1] * LON_B).toFixed(5), elevation: p[2], t: gen,
         coarse: p[0] % K3 === 0 && p[1] % K3 === 0, days: { date: date, rain: sl(0), tmin: sl(1), tmax: sl(2) } });
     });
-    return { generated: d.generated, gen: gen, d0: d.d0, n: n, k: K3, pts: pts, blocked: d.blocked, gauges: d.gauges || null };
+    return { generated: d.generated, gen: gen, d0: d.d0, n: n, k: K3, pts: pts, blocked: d.blocked, stations: d.stations || d.gauges || null };
   }
   async function loadServer() {
     var d = null;
@@ -946,9 +946,11 @@ button { cursor: pointer; }
         }
       }
       if (!buf && cached) { head = cached.head; buf = cached.buf; }
-      if (!head || !buf || buf.length !== head.rows * head.cols * 4) return false;
-      var N = head.rows * head.cols;
-      HAB = Object.assign({}, head, { cat: buf.subarray(0, N), frac: buf.subarray(N, 2 * N), slope: buf.subarray(2 * N, 3 * N), aspect: buf.subarray(3 * N, 4 * N) });
+      var N = head && head.rows * head.cols, per = head && head.v >= 2 ? 6 : 4;
+      if (!head || !buf || buf.length !== N * per) return false;
+      if (buf.byteOffset % 2) buf = buf.slice();
+      HAB = Object.assign({}, head, { cat: buf.subarray(0, N), frac: buf.subarray(N, 2 * N), slope: buf.subarray(2 * N, 3 * N), aspect: buf.subarray(3 * N, 4 * N),
+        elev: per === 6 ? new Uint16Array(buf.buffer, buf.byteOffset + 4 * N, N) : null });
       HAB.lande = head.cats.indexOf("lande"); HAB.full = 0.4 * head.sub * head.sub;   // 40 % de forêt suffit pour un poids plein
       habCache = new Map(); habW = {};
       return true;
@@ -1040,9 +1042,10 @@ button { cursor: pointer; }
   if (!M.SPECIES[state.species]) state.species = "cepes";
   function SP(key) { return M.SPECIES[key || state.species]; }
   function paramsFor(key) { return key === "cepes" ? state.params : (state.spParams[key] || {}); }
-  function wxScore(days, k, elevation) {
-    return state.species === "cepes" ? M.scoreDay(days, k, state.params, { elevation: elevation })
-                                     : M.scoreSpecies(days, k, state.species, paramsFor(state.species), { elevation: elevation });
+  function wxScore(days, k, elevation, dT) {
+    var o = dT ? { elevation: elevation, dT: dT } : { elevation: elevation };
+    return state.species === "cepes" ? M.scoreDay(days, k, state.params, o)
+                                     : M.scoreSpecies(days, k, state.species, paramsFor(state.species), o);
   }
   function entrySpecies(e) { return e.species && M.SPECIES[e.species] ? e.species : "cepes"; }
 
@@ -1104,11 +1107,47 @@ button { cursor: pointer; }
     }
     return wsum >= 0.25 ? sum / wsum : null;
   }
+  var DT_OFF = [-8, -6, -4, -2, 0, 2, 4], LAPSE = -0.0065, accS = 0, accT5 = 0;
+  function nodeAtDT(nd, dT) {
+    var f = (Math.max(-8, Math.min(4, dT)) + 8) / 2, i = Math.min(DT_OFF.length - 2, Math.floor(f)), a = f - i;
+    return nd.s[i] + (nd.s[i + 1] - nd.s[i]) * a;
+  }
+  // Interpolation bilinéaire entre points météo, chacun corrigé à l'altitude z du pixel (résultat dans accS, accT5).
+  function accElev(mapN, step, lonStep, lat, lon, strict, z) {
+    var fi = lat / step, fj = lon / lonStep, i0 = Math.floor(fi), j0 = Math.floor(fj), a = fi - i0, b = fj - j0;
+    var S = 0, T = 0, ws = 0;
+    for (var q = 0; q < 4; q++) {
+      var di = q & 1, dj = q >> 1, w = (di ? a : 1 - a) * (dj ? b : 1 - b);
+      var nd = mapN.get((i0 + di) + "," + (j0 + dj));
+      if (!nd) { if (strict) return false; continue; }
+      var dT = z === 65535 ? 0 : LAPSE * (z - nd.el);
+      S += w * nodeAtDT(nd, dT); T += w * (nd.t5 + dT); ws += w;
+    }
+    if (ws < (strict ? 0.999 : 0.25)) return false;
+    accS = S / ws; accT5 = T / ws;
+    return true;
+  }
   function drawSmooth() {
     var cells = gridState.cells;
     if (!cells.length) return;
     var step = cells[0].dLat, lonStep = cells[0].dLon, vals = new Map(), fineVals = null, t5Vals = new Map(), fineT5 = null;
-    if (SRV) {
+    // Mode altitude : chaque point météo est calculé pour plusieurs décalages de température ;
+    // chaque pixel prend celui qui correspond à l'écart entre son altitude IGN et celle du point.
+    var elevMode = habitatOn() && HAB.elev, fineN = null, coarseN = null;
+    if (elevMode) {
+      fineN = SRV ? new Map() : null; coarseN = new Map();
+      if (SRV) { step = SRV.k * LAT_B; lonStep = SRV.k * LON_B; }
+      cells.forEach(function (p) {
+        var r = wx.get(gkey(p)); if (!r) return;
+        var k = r.days.date.indexOf(state.sel); if (k < 0) return;
+        var s = new Float32Array(DT_OFF.length), t5 = null;
+        for (var o = 0; o < DT_OFF.length; o++) { var sc = wxScore(r.days, k, r.elevation, DT_OFF[o]); s[o] = sc.score; if (DT_OFF[o] === 0) t5 = sc.parts.tMean5; }
+        var nd = { el: r.elevation, s: s, t5: t5 };
+        if (SRV) { fineN.set(p.i + "," + p.j, nd); if (p.coarse) coarseN.set(p.i / SRV.k + "," + p.j / SRV.k, nd); }
+        else coarseN.set(Math.round(p.lat / step) + "," + Math.round(p.lon / lonStep), nd);
+        vals.set("x", 1);
+      });
+    } else if (SRV) {
       step = SRV.k * LAT_B; lonStep = SRV.k * LON_B; fineVals = new Map(); fineT5 = new Map();
       cells.forEach(function (p) {
         var sc = cellInfo(p); if (!sc) return;
@@ -1133,6 +1172,16 @@ button { cursor: pointer; }
     if (hab) { for (y = 0; y < H; y++) hr.push(habRow(lats[y])); for (x = 0; x < W; x++) hc.push(habCol(lons[x])); }
     for (y = 0; y < H; y++) for (x = 0; x < W; x++) {
       if (hab && (hr[y] < 0 || hc[x] < 0)) continue;
+      if (elevMode) {
+        var hidx = hr[y] * HAB.cols + hc[x], z = HAB.elev[hidx];
+        if (!((fineN && accElev(fineN, LAT_B, LON_B, lats[y], lons[x], true, z)) || accElev(coarseN, step, lonStep, lats[y], lons[x], false, z))) continue;
+        var hfe = habFactor(hidx, HW, accT5); if (hfe <= 0) continue;
+        var ce = displayColor(accS * hfe); if (!ce) continue;
+        var ke = (y * W + x) * 4;
+        if (ce.cls != null) cls[y * W + x] = ce.cls;
+        d[ke] = ce.arr[0]; d[ke + 1] = ce.arr[1]; d[ke + 2] = ce.arr[2]; d[ke + 3] = Math.round(255 * op * ce.alpha);
+        continue;
+      }
       var s = fineVals ? interpStrict(fineVals, LAT_B, LON_B, lats[y], lons[x]) : null, t5 = null;
       if (s != null && hab) t5 = interpStrict(fineT5, LAT_B, LON_B, lats[y], lons[x]);
       if (s == null) { s = interpGrid(vals, step, lonStep, lats[y], lons[x]); if (hab) t5 = interpGrid(t5Vals, step, lonStep, lats[y], lons[x]); }
@@ -1469,14 +1518,17 @@ button { cursor: pointer; }
 
     var t = p.trigger, facts = [];
     facts.push(["mm", t && t.raw ? "<strong>Pluie déclenchante : " + fmtNum(t.raw, 0) + " mm le " + fmtDay(t.date, true) + "</strong>, il y a " + daysBetween(t.date, state.sel) + " jours. Pluie utile au total : " + fmtNum(p.effRain, 0) + " mm." : "<strong>Pas de pluie utile</strong> dans la fenêtre de pousse. Il faut en général plusieurs dizaines de millimètres."]);
-    if (SRV && SRV.gauges && SRV.gauges.list && SRV.gauges.list.length) {
-      var gl = SRV.gauges.list.map(function (g) { return { g: g, d: distKm({ lat: sp.lat, lon: sp.lon }, { lat: g[0], lon: g[1] }) }; }).sort(function (a, b) { return a.d - b.d; });
+    if (SRV && SRV.stations && SRV.stations.list && SRV.stations.list.length) {
+      var gl = SRV.stations.list.filter(function (g) { return g[4] != null; }).map(function (g) { return { g: g, d: distKm({ lat: sp.lat, lon: sp.lon }, { lat: g[0], lon: g[1] }) }; }).sort(function (a, b) { return a.d - b.d; });
       var g0 = gl[0];
-      facts.push(["☂", "Pluviomètre Météo-France le plus proche : <strong>" + esc(g0.g[3] || "station") + "</strong> (" + fmtNum(g0.d, 0) + " km, " + fmtNum(g0.g[2], 0) + " m) : <strong>" + fmtNum(g0.g[4], 0) + " mm</strong> mesurés en 14 jours, contre " + fmtNum(g0.g[5], 0) + " mm pour le modèle. " +
-        (g0.d <= 15 ? "La pluie de ce coin est corrigée avec ses mesures." : "Trop loin pour corriger la pluie de ce coin.")]);
+      if (g0) facts.push(["☂", "Station Météo-France la plus proche : <strong>" + esc(g0.g[3] || "station") + "</strong> (" + fmtNum(g0.d, 0) + " km, " + fmtNum(g0.g[2], 0) + " m) : <strong>" + fmtNum(g0.g[4], 0) + " mm</strong> mesurés en 14 jours, contre " + fmtNum(g0.g[5], 0) + " mm pour le modèle" +
+        (g0.g[6] != null && g0.g[7] != null ? " ; dernière nuit " + fmtNum(g0.g[6], 0) + " °C, dernier après-midi " + fmtNum(g0.g[7], 0) + " °C" : "") + ". " +
+        (g0.d <= 15 ? "La pluie et les températures de ce coin sont recalées sur ses mesures." : g0.d <= 30 ? "Assez loin : seules les températures sont un peu recalées." : "Trop loin pour recaler ce coin.")]);
     }
     facts.push(["j", "Délai estimé entre la pluie et la pousse : <strong>" + fmtNum(p.mu, 0) + " jours</strong> (" + (p.tLag >= 15 ? "plus court par temps doux" : "plus long quand il fait frais") + ", " + fmtNum(p.tLag, 0) + " °C de moyenne sur deux semaines)."]);
-    facts.push(["°C", "Air des 5 derniers jours, corrigé pour " + fmtNum(sp.elevation, 0) + " m d'altitude : <strong>" + fmtNum(p.tMean5, 0) + " °C</strong> en moyenne, " + (p.tempF >= 0.99 ? "idéal" : p.tMean5 < p.tLow ? "un peu frais" : "un peu chaud") + (state.species !== "cepes" ? " pour cette espèce (" + p.tLow + " à " + p.tHigh + " °C)" : "") + (p.frost ? ", avec " + p.frost + " nuit" + (p.frost > 1 ? "s" : "") + " de gel" : "") + "."]);
+    facts.push(["°C", "Air des 5 derniers jours à " + fmtNum(sp.elevation, 0) + " m : <strong>" + fmtNum(p.tMean5, 0) + " °C</strong> ; sol estimé : <strong>" + fmtNum(p.soilT, 0) + " °C</strong> " +
+      (p.soilF >= 0.99 ? "(assez chaud pour pousser" : p.soilF <= 0.1 ? "(trop froid, la pousse s'arrête" : "(un peu froid, la pousse ralentit") + ", pleine pousse dès " + fmtNum(p.soilFull, 0) + " °C)" +
+      (p.heatF < 0.99 ? ", et il fait trop chaud" : "") + (p.frost ? ", " + p.frost + " nuit" + (p.frost > 1 ? "s" : "") + " de gel" : "") + "."]);
     if (sp.soil && (sp.soil.temp != null || sp.soil.moist != null)) {
       var mo = sp.soil.moist, moLab = mo == null ? null : mo < 0.15 ? "sec" : mo < 0.25 ? "frais" : mo < 0.35 ? "humide" : "très humide";
       facts.push(["sol", "Sol ces dernières 24 h" + (sp.soil.temp != null ? " : <strong>" + fmtNum(sp.soil.temp, 0) + " °C à 6 cm</strong>" : "") +
@@ -1662,10 +1714,10 @@ button { cursor: pointer; }
     if (!mine.length) { txt.textContent = "Aucune sortie notée pour « " + SP().label + " » : ajoute-en au carnet avant de caler."; return; }
     if (!samples.length) { txt.textContent = "Impossible de récupérer la météo de tes sorties. Vérifie ta connexion."; return; }
     var r = M.calibrateSpecies(samples, state.species);
-    setParamsFor(state.species, { lagShift: r.params.lagShift, halfSat: r.params.halfSat, altShift: r.params.altShift });
+    setParamsFor(state.species, { lagShift: r.params.lagShift, halfSat: r.params.halfSat, soilShift: r.params.soilShift });
     drawCells(); renderZones(); if (state.spot) renderSpot();
     await renderLog(true);
-    $("#calibText").textContent = "Calé sur " + samples.length + " sortie" + (samples.length > 1 ? "s" : "") + " : délai " + (r.params.lagShift > 0 ? "+" : "") + r.params.lagShift + " j, seuil " + r.params.halfSat + " mm" + (r.fitted.indexOf("altShift") >= 0 ? ", avance en altitude " + r.params.altShift + " j par 100 m" : "") + ". Indice moyen les jours de trouvaille : " + Math.round(r.meanPos) + "/100" + (r.note ? ". " + r.note : ".") + " " + expoReport(samples);
+    $("#calibText").textContent = "Calé sur " + samples.length + " sortie" + (samples.length > 1 ? "s" : "") + " : délai " + (r.params.lagShift > 0 ? "+" : "") + r.params.lagShift + " j, seuil " + r.params.halfSat + " mm" + (r.fitted.indexOf("soilShift") >= 0 ? ", seuil de sol " + (r.params.soilShift > 0 ? "+" : "") + r.params.soilShift + " °C" : "") + ". Indice moyen les jours de trouvaille : " + Math.round(r.meanPos) + "/100" + (r.note ? ". " + r.note : ".") + " " + expoReport(samples);
   }
   function exportLog() {
     var blob = new Blob([JSON.stringify({ app: "cepometre", version: 1, exported: new Date().toISOString(), params: state.params, spParams: state.spParams, log: state.log }, null, 2)], { type: "application/json" });

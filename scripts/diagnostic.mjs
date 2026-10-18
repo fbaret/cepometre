@@ -39,7 +39,7 @@ for (const [a, b] of bands) {
   if (!sel.length) continue;
   const r = sel.map((x) => M.scoreDay(x.days, k, {}, { elevation: x.el }));
   const avg = (f) => r.reduce((s, y) => s + f(y), 0) / r.length;
-  L1.push(`${a}-${b} m : ${sel.length} pts | indice ${f1(avg((y) => y.score))} | pluie ${f2(avg((y) => y.parts.rainF))} (utile ${f1(avg((y) => y.parts.effRain))} mm) | temp ${f2(avg((y) => y.parts.tempF))} (moy5j ${f1(avg((y) => y.parts.tMean5))} °C, gel ${f1(avg((y) => y.parts.frost))} j) | délai ${f1(avg((y) => y.parts.mu))} j | saison ${f2(avg((y) => y.parts.seasonF))}`);
+  L1.push(`${a}-${b} m : ${sel.length} pts | indice ${f1(avg((y) => y.score))} | pluie ${f2(avg((y) => y.parts.rainF))} (utile ${f1(avg((y) => y.parts.effRain))} mm) | temp ${f2(avg((y) => y.parts.tempF))} (air 5j ${f1(avg((y) => y.parts.tMean5))} °C, sol ${f1(avg((y) => y.parts.soilT))} °C → ${f2(avg((y) => y.parts.soilF))}, gel ${f1(avg((y) => y.parts.frost))} j) | délai ${f1(avg((y) => y.parts.mu))} j | saison ${f2(avg((y) => y.parts.seasonF))}`);
 }
 notice("altitude-meteo", L1);
 
@@ -96,11 +96,14 @@ for (const [name, lat, lon] of spots) {
     const rr = Math.floor((H.n - lat) / H.dLat), cc = Math.floor((lon - H.w) / H.dLon), idx = rr * H.cols + cc;
     hab = ` | cellule : ${H.cats[H.cat[idx]]}, forêt ${H.frac[idx]}/25, pente ${H.slope[idx]}°, expo ${H.aspect[idx] * 2}°`;
   }
-  L3.push(`${name} (point météo à ${best.el} m) : indice ${r.score} | pluie 14 j ${f1(rain14)} mm, utile ${f1(p.effRain)} | moy5j ${f1(p.tMean5)} °C, tempF ${f2(p.tempF)}, gel ${p.frost} | délai ${f1(p.mu)} j | saison ${f2(p.seasonF)}${hab}`);
+  L3.push(`${name} (point météo à ${best.el} m) : indice ${r.score} | pluie 14 j ${f1(rain14)} mm, utile ${f1(p.effRain)} | air 5j ${f1(p.tMean5)} °C, sol ${f1(p.soilT)} °C (${f2(p.soilF)}), gel ${p.frost} | délai ${f1(p.mu)} j | saison ${f2(p.seasonF)}${hab}`);
 }
 notice("points-temoins", L3);
-if (wx.gauges) {
-  const g = wx.gauges, top = [...g.list].sort((a, b) => b[4] - a[4]).slice(0, 6);
-  notice("pluviometres", [`${g.stations} pluviomètres, mesuré/modèle : ${g.bias >= 0 ? "+" : ""}${g.bias} % (corrigé le ${g.applied})`,
-    ...top.map((x) => `${x[3]} (${x[2]} m) : ${x[4]} mm mesurés en 14 j, modèle ${x[5]} mm`)]);
+const g = wx.stations || wx.gauges;
+if (g) {
+  const top = [...g.list].filter((x) => x[4] != null).sort((a, b) => b[4] - a[4]).slice(0, 5), cold = [...g.list].filter((x) => x[6] != null).sort((a, b) => b[2] - a[2]).slice(0, 4);
+  notice("stations", [`${g.count || g.stations} stations ; pluie mesurée/modèle ${(g.rainBias ?? g.bias) >= 0 ? "+" : ""}${g.rainBias ?? g.bias} % ; écart station − modèle : minimales ${g.tnBias ?? "?"} °C, maximales ${g.txBias ?? "?"} °C ; correction moyenne ${g.tempMeanCorr ?? "?"} °C ; contrôles ${JSON.stringify(g.qc || {})}`,
+    ...top.map((x) => `${x[3]} (${x[2]} m) : ${x[4]} mm mesurés en 14 j, modèle ${x[5]} mm`),
+    ...cold.map((x) => `${x[3]} (${x[2]} m) : dernière minimale ${x[6]} °C, maximale ${x[7]} °C`)]);
 }
+if (wx.dropped || wx.holes || wx.reused) notice("qualite-meteo", [`points repris du passage précédent : ${wx.reused || 0}, écartés : ${wx.dropped || 0}, avec trous de pluie : ${wx.holes || 0}, appels : ${wx.calls}`]);

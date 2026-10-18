@@ -36,7 +36,7 @@ async function fetchChunk(pts) {
     minute = minute.filter((x) => now - x[0] < 60000);
     const inMin = minute.reduce((s, x) => s + x[1], 0);
     if (inMin + w > PER_MIN && minute.length) { await sleep(minute[0][0] + 61000 - now); continue; }
-    minute.push([Date.now(), w]); used += w; attempt++;
+    minute.push([Date.now(), w]); attempt++;
     let res;
     try { res = await fetch(url); } catch (e) { await sleep(5000); continue; }
     if (res.status === 429) {
@@ -47,6 +47,7 @@ async function fetchChunk(pts) {
     }
     if (!res.ok) { console.log("Open-Meteo", res.status); await sleep(5000); continue; }
     const j = await res.json();
+    used += w;                                   // seuls les appels réussis comptent dans le budget
     return Array.isArray(j) ? j : [j];
   }
   throw new Error("Open-Meteo ne répond pas");
@@ -59,8 +60,9 @@ async function fetchAll(points, recs) {
     const arr = await fetchChunk(chunk);
     arr.forEach((d, n) => {
       const p = chunk[n];
+      const ok = (a, lo, hi) => a.map((v) => (v == null || !isFinite(v) || v < lo || v > hi ? null : v));
       recs.set(p.i + "," + p.j, { i: p.i, j: p.j, el: d.elevation, time: d.daily.time,
-        r: d.daily.precipitation_sum, tn: d.daily.temperature_2m_min, tx: d.daily.temperature_2m_max });
+        r: ok(d.daily.precipitation_sum, 0, 400), tn: ok(d.daily.temperature_2m_min, -45, 45), tx: ok(d.daily.temperature_2m_max, -40, 50) });
     });
     process.stdout.write(".");
   }
@@ -112,9 +114,14 @@ async function main() {
 
   // 3. Fichier précédent pour combler un blocage
   let reused = 0;
-  if (blocked && PREV_URL) {
+  if (PREV_URL) {
     try {
-      const prev = await (await fetch(PREV_URL)).json();
+      let prev = null;
+      for (const u of [PREV_URL, PREV_URL.replace("wx-raw.json", "wx.json")]) {
+        try { const r = await fetch(u); if (r.ok) { prev = await r.json(); break; } } catch (e) { /* suivant */ }
+      }
+      if (!prev) throw new Error("aucun fichier précédent");
+      if (prev.stations || prev.gauges) console.log("Attention : le fichier précédent est déjà corrigé par les stations ; ses points repris le resteront.");
       for (const p of prev.pts) {
         const key = p[0] + "," + p[1];
         if (recs.has(key)) continue;
@@ -130,15 +137,31 @@ async function main() {
   if (!ref) { console.error("Aucune donnée récupérée :", blocked); process.exit(1); }
   const time = ref.time, n = time.length, d0 = time[0];
   const pts = [];
+  let dropped = 0, holes = 0;
   for (const r of recs.values()) {
     let shift = 0;
     if (r.prevD0) shift = Math.round((new Date(d0) - new Date(r.prevD0)) / 864e5);   // réaligne les anciennes séries
-    const pick = (arr) => { const out = []; for (let t = 0; t < n; t++) { const v = arr[t + shift]; out.push(v == null ? (t ? out[t - 1] : 0) : Math.round(v * 10)); } return out; };
-    pts.push([r.i, r.j, Math.round(r.el ?? 0), ...pick(r.r), ...pick(r.tn), ...pick(r.tx)]);
+    const raw = (arr) => { const out = []; for (let t = 0; t < n; t++) { const v = arr[t + shift]; out.push(v == null || !isFinite(v) ? null : v); } return out; };
+    const rain = raw(r.r).map((v) => Math.round((v ?? 0) * 10));
+    const temp = (arr) => {
+      const a = raw(arr), known = a.map((v, t) => (v == null ? -1 : t)).filter((t) => t >= 0);
+      if (!known.length) return null;
+      return a.map((v, t) => {
+        if (v != null) return Math.round(v * 10);
+        const before = known.filter((x) => x < t).pop(), after = known.find((x) => x > t);
+        if (before == null) return Math.round(a[after] * 10);
+        if (after == null) return Math.round(a[before] * 10);
+        return Math.round((a[before] + (a[after] - a[before]) * (t - before) / (after - before)) * 10);
+      });
+    };
+    const tn = temp(r.tn), tx = temp(r.tx);
+    if (!tn || !tx) { dropped++; continue; }
+    if (r.r.filter((v) => v == null).length > 3) holes++;
+    pts.push([r.i, r.j, Math.round(r.el ?? 0), ...rain, ...tn, ...tx]);
   }
-  const data = { v: 1, generated: new Date().toISOString(), d0, n, latB: LAT_B, lonB: LON_B, k: K, calls: used, reused, blocked, pts };
+  const data = { v: 1, generated: new Date().toISOString(), d0, n, latB: LAT_B, lonB: LON_B, k: K, calls: used, reused, blocked, dropped, holes, pts };
   fs.mkdirSync(path.dirname(OUT), { recursive: true });
   fs.writeFileSync(OUT, JSON.stringify(data));
-  console.log("\n" + pts.length + " points écrits dans " + OUT + " (" + Math.round(fs.statSync(OUT).size / 1024) + " Ko), " + used + " appels" + (blocked ? ", blocage : " + blocked + ", " + reused + " points repris" : ""));
+  console.log("\n" + pts.length + " points écrits dans " + OUT + " (" + Math.round(fs.statSync(OUT).size / 1024) + " Ko), " + used + " appels" + (blocked ? ", blocage : " + blocked : "") + (reused ? ", " + reused + " points repris du passage précédent" : "") + (dropped ? ", " + dropped + " points écartés (sans température)" : "") + (holes ? ", " + holes + " points avec des jours de pluie manquants" : ""));
 }
 main();

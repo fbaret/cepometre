@@ -332,18 +332,21 @@ def relief_layer(get_alti=None):
     aspect = (np.degrees(np.arctan2(-dzdx, -dzdy)) + 360) % 360
     s8 = np.where(np.isfinite(slope), np.clip(np.round(slope), 0, 89), 255).astype(np.uint8)
     a8 = np.where(np.isfinite(aspect) & (s8 != 255), np.round(aspect / 2) % 180, 255).astype(np.uint8)
-    return s8, a8, int(np.isfinite(z).sum())
+    e16 = np.where(np.isfinite(Z), np.clip(np.round(Z), 0, 9000), 65535).astype("<u2")
+    return s8, a8, e16, int(np.isfinite(z).sum())
 
 
-def write(outdir, cat, frac, slope, aspect, stats):
+def write(outdir, cat, frac, slope, aspect, stats, elev=None):
     rows, cols = grid_shape()
     os.makedirs(outdir, exist_ok=True)
     buf = cat.tobytes() + frac.tobytes() + slope.tobytes() + aspect.tobytes()
+    if elev is not None:
+        buf += elev.astype("<u2").tobytes()         # altitude IGN (m), 65535 = inconnue
     with open(os.path.join(outdir, "static.bin.gz"), "wb") as f:
         f.write(gzip.compress(buf, 9))
-    head = dict(v=1, built=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), n=BOX["n"], s=BOX["s"], w=BOX["w"], e=BOX["e"],
+    head = dict(v=2 if elev is not None else 1, built=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), n=BOX["n"], s=BOX["s"], w=BOX["w"], e=BOX["e"],
                 dLat=D_LAT, dLon=D_LON, rows=rows, cols=cols, sub=SUB, cats=CATS,
-                planes=["cat", "frac(0-%d)" % (SUB * SUB), "slope(deg,255=?)", "aspect/2(255=?)"], stats=stats)
+                planes=["cat", "frac(0-%d)" % (SUB * SUB), "slope(deg,255=?)", "aspect/2(255=?)"] + (["elev(m,uint16le,65535=?)"] if elev is not None else []), stats=stats)
     with open(os.path.join(outdir, "static.json"), "w") as f:
         json.dump(head, f)
     log("Écrit :", outdir, "(", os.path.getsize(os.path.join(outdir, "static.bin.gz")) // 1024, "Ko compressés )")
@@ -365,11 +368,11 @@ def main():
         with tempfile.TemporaryDirectory() as wd:
             shp = download_bdforet(wd)
             cat, frac = forest_layer(shp)
-    slope, aspect, nz = relief_layer()
+    slope, aspect, elev, nz = relief_layer()
     stats = dict(forest_cells=int((frac > 0).sum()), cells=int(cat.size), alti_points=nz,
                  cats={CATS[i]: int(n) for i, n in enumerate(np.bincount(cat.ravel(), minlength=len(CATS)))})
     log("Bilan :", stats)
-    write(tmp_out, cat, frac, slope, aspect, stats)
+    write(tmp_out, cat, frac, slope, aspect, stats, elev)
     shutil.rmtree(outdir, ignore_errors=True)
     os.replace(tmp_out, outdir)          # le dossier final n'existe qu'en cas de succès complet
 
