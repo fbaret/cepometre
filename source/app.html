@@ -866,7 +866,7 @@ button { cursor: pointer; }
       pts.set("g:" + p[0] + "," + p[1], { i: p[0], j: p[1], lat: +(p[0] * LAT_B).toFixed(5), lon: +(p[1] * LON_B).toFixed(5), elevation: p[2], t: gen,
         coarse: p[0] % K3 === 0 && p[1] % K3 === 0, days: { date: date, rain: sl(0), tmin: sl(1), tmax: sl(2) } });
     });
-    return { generated: d.generated, gen: gen, d0: d.d0, n: n, k: K3, pts: pts, blocked: d.blocked };
+    return { generated: d.generated, gen: gen, d0: d.d0, n: n, k: K3, pts: pts, blocked: d.blocked, gauges: d.gauges || null };
   }
   async function loadServer() {
     var d = null;
@@ -1469,6 +1469,12 @@ button { cursor: pointer; }
 
     var t = p.trigger, facts = [];
     facts.push(["mm", t && t.raw ? "<strong>Pluie déclenchante : " + fmtNum(t.raw, 0) + " mm le " + fmtDay(t.date, true) + "</strong>, il y a " + daysBetween(t.date, state.sel) + " jours. Pluie utile au total : " + fmtNum(p.effRain, 0) + " mm." : "<strong>Pas de pluie utile</strong> dans la fenêtre de pousse. Il faut en général plusieurs dizaines de millimètres."]);
+    if (SRV && SRV.gauges && SRV.gauges.list && SRV.gauges.list.length) {
+      var gl = SRV.gauges.list.map(function (g) { return { g: g, d: distKm({ lat: sp.lat, lon: sp.lon }, { lat: g[0], lon: g[1] }) }; }).sort(function (a, b) { return a.d - b.d; });
+      var g0 = gl[0];
+      facts.push(["☂", "Pluviomètre Météo-France le plus proche : <strong>" + esc(g0.g[3] || "station") + "</strong> (" + fmtNum(g0.d, 0) + " km, " + fmtNum(g0.g[2], 0) + " m) : <strong>" + fmtNum(g0.g[4], 0) + " mm</strong> mesurés en 14 jours, contre " + fmtNum(g0.g[5], 0) + " mm pour le modèle. " +
+        (g0.d <= 15 ? "La pluie de ce coin est corrigée avec ses mesures." : "Trop loin pour corriger la pluie de ce coin.")]);
+    }
     facts.push(["j", "Délai estimé entre la pluie et la pousse : <strong>" + fmtNum(p.mu, 0) + " jours</strong> (" + (p.tLag >= 15 ? "plus court par temps doux" : "plus long quand il fait frais") + ", " + fmtNum(p.tLag, 0) + " °C de moyenne sur deux semaines)."]);
     facts.push(["°C", "Air des 5 derniers jours, corrigé pour " + fmtNum(sp.elevation, 0) + " m d'altitude : <strong>" + fmtNum(p.tMean5, 0) + " °C</strong> en moyenne, " + (p.tempF >= 0.99 ? "idéal" : p.tMean5 < p.tLow ? "un peu frais" : "un peu chaud") + (state.species !== "cepes" ? " pour cette espèce (" + p.tLow + " à " + p.tHigh + " °C)" : "") + (p.frost ? ", avec " + p.frost + " nuit" + (p.frost > 1 ? "s" : "") + " de gel" : "") + "."]);
     if (sp.soil && (sp.soil.temp != null || sp.soil.moist != null)) {

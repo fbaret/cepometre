@@ -99,3 +99,8 @@ for (const [name, lat, lon] of spots) {
   L3.push(`${name} (point météo à ${best.el} m) : indice ${r.score} | pluie 14 j ${f1(rain14)} mm, utile ${f1(p.effRain)} | moy5j ${f1(p.tMean5)} °C, tempF ${f2(p.tempF)}, gel ${p.frost} | délai ${f1(p.mu)} j | saison ${f2(p.seasonF)}${hab}`);
 }
 notice("points-temoins", L3);
+if (wx.gauges) {
+  const g = wx.gauges, top = [...g.list].sort((a, b) => b[4] - a[4]).slice(0, 6);
+  notice("pluviometres", [`${g.stations} pluviomètres, mesuré/modèle : ${g.bias >= 0 ? "+" : ""}${g.bias} % (corrigé le ${g.applied})`,
+    ...top.map((x) => `${x[3]} (${x[2]} m) : ${x[4]} mm mesurés en 14 j, modèle ${x[5]} mm`)]);
+}
