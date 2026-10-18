@@ -407,7 +407,10 @@ button { cursor: pointer; }
     <button type="button" data-fine="1" aria-pressed="false">Fine</button>
     <button type="button" data-fine="2" aria-pressed="false">Très fine</button>
   </div>
-  <label class="toggle" for="tgSmooth">Lisser entre les points <input type="checkbox" id="tgSmooth" checked></label>
+  <label class="toggle" for="tgSmooth" id="smoothRow">Lisser entre les points <input type="checkbox" id="tgSmooth" checked></label>
+  <h3>Forêts et relief</h3>
+  <label class="toggle" for="tgHab">Tenir compte des arbres et de l'exposition <input type="checkbox" id="tgHab" checked></label>
+  <p class="small muted" id="habNote"></p>
   <p class="small muted" id="fineNote"></p>
   <h3>Hors ligne</h3>
   <p class="small muted">Garde les cartes de la zone affichée (trois niveaux de zoom de plus) et sa météo, pour t'en servir en forêt sans réseau.</p>
@@ -542,6 +545,7 @@ button { cursor: pointer; }
     idxOpacity: load("idxOpacity", 0.65),
     fine: load("fine", 0),
     smooth: load("smooth", true),
+    habitat: load("habitat", true),
     showForest: load("showForest", true),
     forestOpacity: load("forestOpacity", 0.55),
     params: load("params", {}),          // calage des « Cèpes (tous) », inchangé
@@ -590,6 +594,9 @@ button { cursor: pointer; }
     $("#tgIndex").checked = state.showIndex; $("#tgForest").checked = state.showForest; $("#opForest").value = state.forestOpacity;
     $("#thr").value = state.thr; $("#thrVal").textContent = state.thr; $("#tgStretch").checked = state.stretch; $("#tgStretch").disabled = state.thr === 0;
     $("#tgSmooth").checked = state.smooth;
+    $("#tgHab").checked = state.habitat; $("#tgHab").disabled = !HAB; $("#smoothRow").hidden = habitatOn();
+    $("#habNote").textContent = HAB ? (state.habitat ? "Carte = météo × essence des arbres × part de forêt × exposition du versant, sur une grille de 250 m (carte forestière et relief de l'IGN). Les landes et zones sans forêt s'effacent."
+      : "Carte = météo seule. Les landes et les prairies peuvent apparaître favorables.") : "Grille des forêts et du relief pas encore disponible : la carte montre la météo seule.";
     document.querySelectorAll("#colSeg button").forEach(function (b) { b.setAttribute("aria-pressed", String(b.dataset.col === state.colorMode)); });
     $("#stretchLbl").textContent = state.colorMode === "steps" ? "Répartir les paliers du seuil à 100" : "Étaler les couleurs du seuil à 100";
     $("#tgContour").checked = state.contours; $("#contourRow").hidden = state.colorMode !== "steps" || !state.smooth;
@@ -920,6 +927,68 @@ button { cursor: pointer; }
       loadServer().then(function () { if (SRV) srvGrid(); });
   });
 
+  /* ---------- Forêts et relief précalculés (data/static.json + static.bin.gz) ----------
+   * Grille de 250 m sur le 64 et le 65, préparée une fois par le serveur : essence dominante,
+   * part de forêt (sur 25 sous-points), pente et exposition. La carte multiplie la météo par ces poids. */
+  var HAB = null, habCache = new Map(), habW = {};
+  async function loadStatic() {
+    try {
+      var head = null, buf = null, cached = (await idb.getMany(["srv:static"]))["srv:static"];
+      try { var rh = await fetchWithTimeout("data/static.json", 15000); if (rh.ok) head = await rh.json(); } catch (e) {}
+      if (head && cached && cached.built === head.built) buf = cached.buf;
+      else if (head) {
+        var rb = await fetchWithTimeout("data/static.bin.gz", 90000);
+        if (rb.ok) {
+          var ab = new Uint8Array(await rb.arrayBuffer());
+          // Le serveur peut l'avoir déjà décompressé (Content-Encoding) : on ne décompresse que si besoin.
+          if (ab[0] === 0x1f && ab[1] === 0x8b) ab = new Uint8Array(await new Response(new Blob([ab]).stream().pipeThrough(new DecompressionStream("gzip"))).arrayBuffer());
+          buf = ab; idb.put({ k: "srv:static", t: Date.now(), built: head.built, head: head, buf: buf });
+        }
+      }
+      if (!buf && cached) { head = cached.head; buf = cached.buf; }
+      if (!head || !buf || buf.length !== head.rows * head.cols * 4) return false;
+      var N = head.rows * head.cols;
+      HAB = Object.assign({}, head, { cat: buf.subarray(0, N), frac: buf.subarray(N, 2 * N), slope: buf.subarray(2 * N, 3 * N), aspect: buf.subarray(3 * N, 4 * N) });
+      HAB.lande = head.cats.indexOf("lande"); HAB.full = 0.4 * head.sub * head.sub;   // 40 % de forêt suffit pour un poids plein
+      habCache = new Map(); habW = {};
+      return true;
+    } catch (e) { return false; }
+  }
+  function habitatOn() { return !!(HAB && state.habitat); }
+  function habWeights(sp) {
+    if (habW[sp]) return habW[sp];
+    var w = new Float32Array(HAB.cats.length);
+    HAB.cats.forEach(function (key, i) {
+      w[i] = key === "horsforet" ? 0 : key === "inconnu" ? 0.5 : M.withSpeciesEssence(1000, sp, key) / 1000;
+    });
+    return (habW[sp] = w);
+  }
+  function habRow(lat) { var r = Math.floor((HAB.n - lat) / HAB.dLat); return r >= 0 && r < HAB.rows ? r : -1; }
+  function habCol(lon) { var c = Math.floor((lon - HAB.w) / HAB.dLon); return c >= 0 && c < HAB.cols ? c : -1; }
+  // Poids d'une cellule : essence × part de forêt (× exposition si la température est connue).
+  function habFactor(idx, W, t5) {
+    var c = HAB.cat[idx]; if (!c) return 0;
+    var w = W[c];
+    if (c !== HAB.lande) w *= Math.min(1, HAB.frac[idx] / HAB.full);
+    var s = HAB.slope[idx];
+    if (w > 0 && s !== 255 && t5 != null) w *= M.exposureFactor({ slope: s, aspect: HAB.aspect[idx] * 2 }, t5).f;
+    return w;
+  }
+  // Meilleure cellule autour d'un point de grille météo (pour la liste des secteurs et les pastilles des jours).
+  function nodeHab(p) {
+    var key = state.species + "|" + p.lat + "," + p.lon, h = habCache.get(key);
+    if (h) return h;
+    var W = habWeights(state.species), best = { w: 0, lat: p.lat, lon: p.lon, cat: 0 };
+    var r0 = Math.max(0, Math.floor((HAB.n - (p.lat + p.dLat / 2)) / HAB.dLat)), r1 = Math.min(HAB.rows - 1, Math.floor((HAB.n - (p.lat - p.dLat / 2)) / HAB.dLat));
+    var c0 = Math.max(0, Math.floor((p.lon - p.dLon / 2 - HAB.w) / HAB.dLon)), c1 = Math.min(HAB.cols - 1, Math.floor((p.lon + p.dLon / 2 - HAB.w) / HAB.dLon));
+    for (var r = r0; r <= r1; r++) for (var c = c0; c <= c1; c++) {
+      var idx = r * HAB.cols + c, w = habFactor(idx, W, null);
+      if (w > best.w) best = { w: w, lat: HAB.n - (r + 0.5) * HAB.dLat, lon: HAB.w + (c + 0.5) * HAB.dLon, cat: HAB.cat[idx] };
+    }
+    habCache.set(key, best);
+    return best;
+  }
+
   var refreshTimer = null;
   function scheduleRefresh() { clearTimeout(refreshTimer); refreshTimer = setTimeout(refreshGrid, 800); }
   async function refreshGrid() {
@@ -977,6 +1046,11 @@ button { cursor: pointer; }
   }
   function entrySpecies(e) { return e.species && M.SPECIES[e.species] ? e.species : "cepes"; }
 
+  function cellInfo(p) {
+    var r = wx.get(gkey(p)); if (!r) return null;
+    var k = r.days.date.indexOf(state.sel); if (k < 0) return null;
+    return wxScore(r.days, k, r.elevation);
+  }
   function cellScore(p) {
     var r = wx.get(gkey(p));
     if (!r) return null;
@@ -989,7 +1063,7 @@ button { cursor: pointer; }
     stepCache = null;
     cellsLayer.clearLayers();
     renderMapLegend();
-    if (state.smooth) drawSmooth(); else drawRects();
+    if (state.smooth || habitatOn()) drawSmooth(); else drawRects();
     renderDays();
   }
   function legendStepsHTML(cls) {
@@ -999,7 +1073,7 @@ button { cursor: pointer; }
     var box = $("#mapLegend");
     if (!state.showIndex || gridState.tooWide) { box.hidden = true; return; }
     if (state.colorMode === "steps") {
-      box.innerHTML = '<span class="cap">' + esc(SP().label) + " · à partir de</span><div class=\"sw\">" + legendStepsHTML(stepClasses()) + "</div>";
+      box.innerHTML = '<span class="cap">' + esc(SP().label) + (habitatOn() ? " · météo × forêt × relief" : " · météo seule") + " · à partir de</span><div class=\"sw\">" + legendStepsHTML(stepClasses()) + "</div>";
     } else {
       var t0 = state.thr, stops = [];
       for (var q = 0; q <= 8; q++) { var v = t0 + (100 - t0) * q / 8, c = displayColor(v) || scoreColor(v); stops.push("rgba(" + c.arr.slice(0, 3).map(Math.round).join(",") + "," + Math.max(0.2, c.alpha).toFixed(2) + ") " + (q * 12.5) + "%"); }
@@ -1033,12 +1107,19 @@ button { cursor: pointer; }
   function drawSmooth() {
     var cells = gridState.cells;
     if (!cells.length) return;
-    var step = cells[0].dLat, lonStep = cells[0].dLon, vals = new Map(), fineVals = null;
+    var step = cells[0].dLat, lonStep = cells[0].dLon, vals = new Map(), fineVals = null, t5Vals = new Map(), fineT5 = null;
     if (SRV) {
-      step = SRV.k * LAT_B; lonStep = SRV.k * LON_B; fineVals = new Map();
-      cells.forEach(function (p) { var s = cellScore(p); if (s == null) return; fineVals.set(p.i + "," + p.j, s); if (p.coarse) vals.set(p.i / SRV.k + "," + p.j / SRV.k, s); });
+      step = SRV.k * LAT_B; lonStep = SRV.k * LON_B; fineVals = new Map(); fineT5 = new Map();
+      cells.forEach(function (p) {
+        var sc = cellInfo(p); if (!sc) return;
+        fineVals.set(p.i + "," + p.j, sc.score); fineT5.set(p.i + "," + p.j, sc.parts.tMean5);
+        if (p.coarse) { vals.set(p.i / SRV.k + "," + p.j / SRV.k, sc.score); t5Vals.set(p.i / SRV.k + "," + p.j / SRV.k, sc.parts.tMean5); }
+      });
     } else
-    cells.forEach(function (p) { var s = cellScore(p); if (s != null) vals.set(Math.round(p.lat / step) + "," + Math.round(p.lon / lonStep), s); });
+    cells.forEach(function (p) {
+      var sc = cellInfo(p); if (!sc) return;
+      var kk = Math.round(p.lat / step) + "," + Math.round(p.lon / lonStep); vals.set(kk, sc.score); t5Vals.set(kk, sc.parts.tMean5);
+    });
     if (!vals.size) return;
     var size = map.getSize(), px = state.colorMode === "steps" ? 2 : 3, padX = Math.round(size.x * 0.15), padY = Math.round(size.y * 0.15);
     var W = Math.ceil((size.x + 2 * padX) / px), H = Math.ceil((size.y + 2 * padY) / px);
@@ -1048,10 +1129,15 @@ button { cursor: pointer; }
     for (var x = 0; x < W; x++) lons.push(map.containerPointToLatLng([x * px + px / 2 - padX, 0]).lng);
     for (var y = 0; y < H; y++) lats.push(map.containerPointToLatLng([0, y * px + px / 2 - padY]).lat);
     var cls = new Int8Array(W * H).fill(-1), op = state.idxOpacity;
+    var hab = habitatOn(), HW = hab ? habWeights(state.species) : null, hr = [], hc = [];
+    if (hab) { for (y = 0; y < H; y++) hr.push(habRow(lats[y])); for (x = 0; x < W; x++) hc.push(habCol(lons[x])); }
     for (y = 0; y < H; y++) for (x = 0; x < W; x++) {
-      var s = fineVals ? interpStrict(fineVals, LAT_B, LON_B, lats[y], lons[x]) : null;
-      if (s == null) s = interpGrid(vals, step, lonStep, lats[y], lons[x]);
+      if (hab && (hr[y] < 0 || hc[x] < 0)) continue;
+      var s = fineVals ? interpStrict(fineVals, LAT_B, LON_B, lats[y], lons[x]) : null, t5 = null;
+      if (s != null && hab) t5 = interpStrict(fineT5, LAT_B, LON_B, lats[y], lons[x]);
+      if (s == null) { s = interpGrid(vals, step, lonStep, lats[y], lons[x]); if (hab) t5 = interpGrid(t5Vals, step, lonStep, lats[y], lons[x]); }
       if (s == null) continue;
+      if (hab) { var hf = habFactor(hr[y] * HAB.cols + hc[x], HW, t5); if (hf <= 0) continue; s = s * hf; }
       var c = displayColor(s);
       if (!c) continue;
       var k = (y * W + x) * 4;
@@ -1103,6 +1189,7 @@ button { cursor: pointer; }
       var r = wx.get(gkey(p)); if (!r) return;
       var k = r.days.date.indexOf(d); if (k < 0) return;
       var s = wxScore(r.days, k, r.elevation).score;
+      if (habitatOn()) s = Math.round(s * nodeHab(p).w);
       if (best == null || s > best) best = s;
     });
     return best;
@@ -1166,8 +1253,9 @@ button { cursor: pointer; }
       if (!b.contains([p.lat, p.lon])) return;
       var r = wx.get(gkey(p)); if (!r) return;
       var k = r.days.date.indexOf(state.sel); if (k < 0) return;
-      var sc = wxScore(r.days, k, r.elevation);
-      rows.push({ p: p, r: r, s: sc.score, parts: sc.parts });
+      var sc = wxScore(r.days, k, r.elevation), nh = habitatOn() ? nodeHab(p) : null;
+      rows.push({ p: p, r: r, s: nh ? Math.round(sc.score * nh.w) : sc.score, parts: sc.parts, hab: nh,
+        pos: nh && nh.w > 0 ? { lat: nh.lat, lon: nh.lon } : { lat: p.lat, lon: p.lon } });
     });
     var anyRows = rows.length;
     rows = rows.filter(function (x) { return x.s >= state.thr; });
@@ -1176,20 +1264,22 @@ button { cursor: pointer; }
     // Évite d'afficher cinq cases voisines : on garde des secteurs distants d'au moins 4 km.
     var picked = [];
     for (var i = 0; i < rows.length && picked.length < 6; i++) {
-      if (picked.every(function (q) { return distKm(q.p, rows[i].p) > 4; })) picked.push(rows[i]);
+      if (picked.every(function (q) { return distKm(q.pos, rows[i].pos) > 4; })) picked.push(rows[i]);
     }
     if (gridState.loading) parts.push('<p class="muted small">Chargement de la météo : ' + gridState.done + " sur " + gridState.todo + " points, du centre vers les bords.</p>");
     if (picked.length) {
       parts.push('<div class="label">Meilleurs secteurs dans la zone</div><ul class="list">' + picked.map(function (x) {
         var t = x.parts.trigger;
         var why = t && t.raw ? fmtNum(t.raw, 0) + " mm le " + fmtDay(t.date) : "peu de pluie utile";
-        var dist = state.me ? " · " + fmtNum(distKm(state.me, x.p), 0) + " km" : "";
-        return '<li><button type="button" class="row" data-lat="' + x.p.lat + '" data-lon="' + x.p.lon + '">' +
+        var dist = state.me ? " · " + fmtNum(distKm(state.me, x.pos), 0) + " km" : "";
+        var what = x.hab && x.hab.cat ? M.ESSENCES[HAB.cats[x.hab.cat]] ? M.ESSENCES[HAB.cats[x.hab.cat]].label : "Forêt" : fmtNum(x.r.elevation, 0) + " m";
+        return '<li><button type="button" class="row" data-lat="' + x.pos.lat.toFixed(5) + '" data-lon="' + x.pos.lon.toFixed(5) + '">' +
           '<span class="pill" style="' + pillStyle(x.s) + '">' + x.s + '</span>' +
-          '<span class="meta"><b>' + verdict(x.s) + " · " + fmtNum(x.r.elevation, 0) + ' m</b><span>' + why + dist + "</span></span>" +
+          '<span class="meta"><b>' + verdict(x.s) + " · " + esc(what) + '</b><span>' + why + dist + "</span></span>" +
           '<span class="chev" aria-hidden="true">›</span></button></li>';
       }).join("") + "</ul>");
-      parts.push('<p class="muted small">La carte ne voit que la météo, à l\'échelle de quelques kilomètres. Touche un coin : sa fiche ajoute l\'essence des arbres et l\'exposition du versant.</p>');
+      parts.push('<p class="muted small">' + (habitatOn() ? "La carte combine la météo, l\'essence des arbres, la part de forêt et l\'exposition, à 250 m près. Chaque secteur mène à la meilleure parcelle boisée du coin ; sa fiche affine au point exact."
+        : "La carte ne voit que la météo, à l\'échelle de quelques kilomètres. Touche un coin : sa fiche ajoute l\'essence des arbres et l\'exposition du versant.") + "</p>");
     }
     var u = usage(Date.now());
     if (SRV) parts.push('<p class="small muted">Météo préparée par le serveur le ' + fmtDay(iso(new Date(SRV.gen)), true) + " à " + new Date(SRV.gen).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }) +
@@ -1740,6 +1830,7 @@ button { cursor: pointer; }
   document.querySelectorAll("#colSeg button").forEach(function (b) {
     b.onclick = function () { state.colorMode = b.dataset.col; store("colorMode", state.colorMode); refreshColors(); };
   });
+  $("#tgHab").onchange = function (e) { state.habitat = e.target.checked; store("habitat", state.habitat); habCache = new Map(); refreshColors(); };
   $("#tgContour").onchange = function (e) { state.contours = e.target.checked; store("contours", state.contours); drawCells(); };
   var opTimer = null;
   $("#opIndex").oninput = function (e) {
@@ -1793,7 +1884,7 @@ button { cursor: pointer; }
   renderOffline();
   ensurePersist(true);
   setStatus();
-  loadServer().then(function () { applyLayers(); refreshGrid(); });
+  Promise.all([loadServer(), loadStatic()]).then(function () { applyLayers(); refreshGrid(); });
 
   if ("serviceWorker" in navigator && location.protocol === "https:") {
     navigator.serviceWorker.register("sw.js").catch(function () {});

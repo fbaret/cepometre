@@ -17,7 +17,7 @@ concurrency:
 jobs:
   publier:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
@@ -36,6 +36,32 @@ jobs:
         env:
           PREV_URL: https://vestra.fr/cepometre/data/wx.json
         run: node scripts/meteo.mjs site/data/wx.json
+
+      # Forêts et relief : calculés une seule fois, puis repris du cache de GitHub (recalculés si le script change).
+      - uses: actions/cache@v4
+        id: statique
+        with:
+          path: static-cache
+          key: statique-v1-${{ hashFiles('scripts/statique.py') }}
+
+      - uses: actions/setup-python@v5
+        if: steps.statique.outputs.cache-hit != 'true'
+        with:
+          python-version: "3.12"
+
+      - name: Précalculer forêts (BD Forêt IGN) et relief (altimétrie IGN)
+        if: steps.statique.outputs.cache-hit != 'true'
+        continue-on-error: true
+        timeout-minutes: 30
+        run: |
+          sudo apt-get install -y -qq p7zip-full > /dev/null
+          pip install -q numpy
+          python scripts/statique.py static-cache
+
+      - name: Joindre forêts et relief au site
+        run: |
+          if [ -f static-cache/static.json ]; then cp static-cache/static.json static-cache/static.bin.gz site/data/ && cat static-cache/static.json | head -c 600; echo
+          else echo "Grille forêts/relief absente : la carte restera en météo seule."; fi
 
       - name: Vérifier le dossier de destination (protection de vestra.fr)
         env:
