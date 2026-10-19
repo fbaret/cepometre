@@ -366,6 +366,9 @@ button { cursor: pointer; }
   <button class="fab" id="btnLayers" aria-label="Fonds de carte et couches" aria-pressed="false">
     <svg viewBox="0 0 24 24"><path d="M12 3 2 8l10 5 10-5-10-5z"/><path d="m2 13 10 5 10-5"/><path d="m2 17.5 10 5 10-5"/></svg>
   </button>
+  <button class="fab" id="btnSettings" aria-label="Paramètres" aria-pressed="false">
+    <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+  </button>
   <button class="fab" id="btnLocate" aria-label="Me localiser">
     <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>
   </button>
@@ -407,6 +410,9 @@ button { cursor: pointer; }
     <label for="opIndex">Opacité de l'indice</label>
     <input type="range" id="opIndex" min="0.3" max="1" step="0.05" value="0.65">
   </div>
+</div>
+
+<div class="layers" id="settings" hidden>
   <h3>Finesse de la grille</h3>
   <div class="seg" id="fineSeg">
     <button type="button" data-fine="0" aria-pressed="true">Normale</button>
@@ -1986,7 +1992,7 @@ button { cursor: pointer; }
       saveLog(); showTab("log"); renderLog(true); toast("Position enregistrée");
       return;
     }
-    $("#layers").hidden = true; $("#btnLayers").setAttribute("aria-pressed", "false");
+    closePanels();
     openSpot(+ev.latlng.lat.toFixed(5), +ev.latlng.lng.toFixed(5));
   });
   map.on("moveend", function () { scheduleRefresh(); renderDays(); });
@@ -2023,11 +2029,16 @@ button { cursor: pointer; }
   };
   $("#alOff").onclick = function () { alertReq("DELETE").then(function () { showAlertState(null); toast("Alerte arrêtée"); }).catch(function () { toast("Impossible pour l'instant"); }); };
 
+  function closePanels() { ["layers", "settings"].forEach(function (id) { $("#" + id).hidden = true; }); $("#btnLayers").setAttribute("aria-pressed", "false"); $("#btnSettings").setAttribute("aria-pressed", "false"); }
+  function togglePanel(id, btn) {
+    var p = $("#" + id), open = p.hidden;
+    closePanels(); p.hidden = !open; btn.setAttribute("aria-pressed", String(open));
+    if (open && window.innerWidth < 900) sheet.classList.remove("open");
+    return open;
+  }
+  $("#btnSettings").onclick = function () { if (togglePanel("settings", this)) loadAlertState(); };
   $("#btnLayers").onclick = function () {
-    var p = $("#layers"); p.hidden = !p.hidden; this.setAttribute("aria-pressed", String(!p.hidden));
-    if (!p.hidden) loadAlertState();
-    // Sur téléphone, on replie le volet du bas pour laisser la place aux réglages et voir la carte réagir.
-    if (!p.hidden && window.innerWidth < 900) sheet.classList.remove("open");
+    togglePanel("layers", this);
   };
   document.querySelectorAll("#baseSeg button").forEach(function (b) { b.onclick = function () { state.base = b.dataset.base; store("base", state.base); applyLayers(); }; });
   $("#tgIndex").onchange = function (e) { state.showIndex = e.target.checked; store("showIndex", state.showIndex); applyLayers(); };

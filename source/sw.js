@@ -4,7 +4,7 @@
  * - Les morceaux de carte : cache d'abord. Ceux consultés en passant sont
  *   limités à 4 000 ; ceux des « zones gardées » ne sont jamais effacés
  *   automatiquement (cache « cepometre-zones », géré depuis l'appli). */
-var VERSION = "cepometre-v18";
+var VERSION = "cepometre-v19";
 var KEEP = ["cepometre-zones"];
 var SHELL = [
   "./", "index.html", "manifest.webmanifest", "icon-192.png", "icon-512.png",
