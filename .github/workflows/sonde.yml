@@ -1,0 +1,13 @@
+name: Sonde point
+on:
+  workflow_dispatch:
+    inputs:
+      points: { description: "nom,lat,lon;...", required: true }
+jobs:
+  sonde:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          mkdir -p d && for f in wx.json static.json static.bin.gz public.json public.bin.gz; do curl -fsSL https://vestra.fr/cepometre/data/$f -o d/$f; done
+          POINTS="${{ inputs.points }}" node scripts/diagnostic.mjs d

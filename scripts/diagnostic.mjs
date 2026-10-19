@@ -85,6 +85,7 @@ if (H) {
 
 // 3. Points témoins
 const spots = [["Iraty", 43.04, -1.08], ["Parbayse", 43.392, -0.564], ["Bois du Bager (Oloron)", 43.11, -0.55], ["Plaine de Pau", 43.33, -0.40]];
+if (process.env.POINTS) for (const t of process.env.POINTS.split(";")) { const [nm, la, lo] = t.split(","); spots.push([nm, +la, +lo]); }
 const L3 = [];
 for (const [name, lat, lon] of spots) {
   let best = null, bd = 1e9;
@@ -94,9 +95,10 @@ for (const [name, lat, lon] of spots) {
   let hab = "";
   if (H) {
     const rr = Math.floor((H.n - lat) / H.dLat), cc = Math.floor((lon - H.w) / H.dLon), idx = rr * H.cols + cc;
-    hab = ` | cellule : ${H.cats[H.cat[idx]]}, forêt ${H.frac[idx]}/25, pente ${H.slope[idx]}°, expo ${H.aspect[idx] * 2}°`;
+    hab = ` | cellule : ${H.cats[H.cat[idx]]}, forêt ${H.frac[idx]}/25, pente ${H.slope[idx]}°, expo ${H.aspect[idx] * 2}°` + (H.v >= 2 ? `, alt. IGN ${zlib.gunzipSync(fs.readFileSync(dir + "/static.bin.gz")).readUInt16LE(4 * H.rows * H.cols + 2 * idx)} m` : "");
   }
-  L3.push(`${name} (point météo à ${best.el} m) : indice ${r.score} | pluie 14 j ${f1(rain14)} mm, utile ${f1(p.effRain)} | air 5j ${f1(p.tMean5)} °C, sol ${f1(p.soilT)} °C (${f2(p.soilF)}), gel ${p.frost} | délai ${f1(p.mu)} j | saison ${f2(p.seasonF)}${hab}`);
+  const series = best.days.date.map((d, i) => d.slice(5) + ":" + best.days.rain[i]).filter((x, i) => best.days.rain[i] >= 3).join(" ");
+  L3.push(`${name} (point météo à ${best.el} m ; pluies ≥3 mm ${series}) : indice ${r.score} | pluie 14 j ${f1(rain14)} mm, utile ${f1(p.effRain)} | air 5j ${f1(p.tMean5)} °C, sol ${f1(p.soilT)} °C (${f2(p.soilF)}), gel ${p.frost} | délai ${f1(p.mu)} j | saison ${f2(p.seasonF)}${hab}`);
 }
 notice("points-temoins", L3);
 const g = wx.stations || wx.gauges;
