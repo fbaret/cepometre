@@ -136,12 +136,31 @@ jobs:
           if [ -f public-cache/public.json ]; then cp public-cache/public.json public-cache/public.bin.gz site/data/
           else echo "Forêts publiques absentes : le filtre sera indisponible."; fi
 
+      # État des alertes perso (zone autour de chez toi) : gardé dans le cache de GitHub, jamais publié.
+      - uses: actions/cache/restore@v4
+        with:
+          path: alert-state
+          key: alertes-${{ github.run_id }}
+          restore-keys: alertes-
+
       - name: Alerte si un jour de la semaine passe à 80 ou plus
+        id: alerte
         continue-on-error: true
         env:
+          HOME_LAT: ${{ secrets.HOME_LAT }}
+          HOME_LON: ${{ secrets.HOME_LON }}
+          RAYON: ${{ secrets.RAYON }}
+          ALERT_EMAIL: ${{ secrets.ALERT_EMAIL }}
+          STATE_FILE: alert-state/local.json
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC || 'cepes-yxrsq4741' }}
           PREV_URL: https://vestra.fr/cepometre/data/alertes.json
         run: node scripts/alerte.mjs site/data
+
+      - uses: actions/cache/save@v4
+        if: always() && hashFiles('alert-state/local.json') != ''
+        with:
+          path: alert-state
+          key: alertes-${{ github.run_id }}
 
       - name: Diagnostic (altitude, forêt, points témoins)
         if: github.event_name != 'schedule'
