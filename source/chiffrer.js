@@ -24,6 +24,9 @@ const model = fs.readFileSync(path.join(src, "model.js"), "utf8");
 const tag = '<script src="model.js"></script>';
 if (!app.includes(tag)) { console.error("app.html ne charge plus model.js comme prévu."); process.exit(1); }
 app = app.replace(tag, () => "<script>\n" + model + "\n</script>");
+// Jeton de l'alerte perso : connu seulement de l'appli déchiffrée et de GitHub (dérivé du mot de passe).
+const alertToken = crypto.createHash("sha256").update(pw + ":alerte").digest("hex");
+app = app.replace("__ALERT_TOKEN__", alertToken);
 
 const selFile = path.join(src, "sel.txt");
 if (!fs.existsSync(selFile)) fs.writeFileSync(selFile, crypto.randomBytes(16).toString("base64") + "\n");
@@ -41,4 +44,7 @@ fs.writeFileSync(path.join(out, "index.html"), lock);
 for (const f of ["sw.js", "manifest.webmanifest", "icon-192.png", "icon-512.png", "icon-maskable-512.png"]) {
   fs.copyFileSync(path.join(src, f), path.join(out, f));
 }
+fs.mkdirSync(path.join(out, "api"), { recursive: true });
+fs.writeFileSync(path.join(out, "api", "alerte.php"), fs.readFileSync(path.join(src, "api", "alerte.php"), "utf8")
+  .replace("__TOKEN_HASH__", crypto.createHash("sha256").update(alertToken).digest("hex")));
 console.log("Version chiffrée écrite dans " + out + " (" + fs.readdirSync(out).length + " fichiers).");

@@ -143,14 +143,27 @@ jobs:
           key: alertes-${{ github.run_id }}
           restore-keys: alertes-
 
+      # Réglage perso choisi dans l'appli (position GPS, rayon, mail), lu sur l'hébergement avec le jeton.
+      - name: Lire le réglage de l'alerte perso
+        continue-on-error: true
+        env:
+          CEPO_PASSWORD: ${{ secrets.CEPO_PASSWORD }}
+        run: |
+          TOK=$(printf '%s' "$CEPO_PASSWORD:alerte" | sha256sum | cut -d' ' -f1)
+          curl -fsS -H "X-Token: $TOK" https://vestra.fr/cepometre/api/alerte.php -o /tmp/reglage.json || exit 0
+          python3 - <<'PY' >> "$GITHUB_ENV"
+          import json
+          d = json.load(open("/tmp/reglage.json"))
+          if d.get("lat"):
+              print("HOME_LAT=%s\nHOME_LON=%s\nRAYON=%s" % (d["lat"], d["lon"], d.get("rayon", 20)))
+              if d.get("email"): print("ALERT_EMAIL=" + d["email"])
+          PY
+          echo "Réglage perso : $(python3 -c 'import json;d=json.load(open("/tmp/reglage.json"));print("actif, rayon %s km%s" % (d["rayon"], ", mail" if d.get("email") else "") if d.get("lat") else "aucun")')"
+
       - name: Alerte si un jour de la semaine passe à 80 ou plus
         id: alerte
         continue-on-error: true
         env:
-          HOME_LAT: ${{ secrets.HOME_LAT }}
-          HOME_LON: ${{ secrets.HOME_LON }}
-          RAYON: ${{ secrets.RAYON }}
-          ALERT_EMAIL: ${{ secrets.ALERT_EMAIL }}
           STATE_FILE: alert-state/local.json
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC || 'cepes-yxrsq4741' }}
           PREV_URL: https://vestra.fr/cepometre/data/alertes.json
@@ -186,4 +199,4 @@ jobs:
           sudo apt-get install -y -qq lftp > /dev/null
           D="${DIR#./}"; D="${D%/}"
           # mirror -R : copie site/ vers le dossier distant ; --delete n'efface que ce qui est DANS ce dossier.
-          lftp -u "$USER,$PASS" "sftp://$HOST" -e "set sftp:auto-confirm yes; set net:max-retries 3; mkdir -p -f $D; mirror -R --delete --verbose --parallel=4 site $D; bye"
+          lftp -u "$USER,$PASS" "sftp://$HOST" -e "set sftp:auto-confirm yes; set net:max-retries 3; mkdir -p -f $D; mirror -R --delete --exclude api/data/ --verbose --parallel=4 site $D; bye"

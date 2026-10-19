@@ -4,7 +4,7 @@
  * - Les morceaux de carte : cache d'abord. Ceux consultés en passant sont
  *   limités à 4 000 ; ceux des « zones gardées » ne sont jamais effacés
  *   automatiquement (cache « cepometre-zones », géré depuis l'appli). */
-var VERSION = "cepometre-v17";
+var VERSION = "cepometre-v18";
 var KEEP = ["cepometre-zones"];
 var SHELL = [
   "./", "index.html", "manifest.webmanifest", "icon-192.png", "icon-512.png",
@@ -64,7 +64,7 @@ self.addEventListener("fetch", function (e) {
   }
 
   // Données du serveur : jamais en cache ici, l'appli garde sa copie dans IndexedDB.
-  if (url.origin === self.location.origin && url.pathname.indexOf("/data/") >= 0) return;
+  if (url.origin === self.location.origin && (url.pathname.indexOf("/data/") >= 0 || url.pathname.indexOf("/api/") >= 0)) return;
 
   // Appli, polices, légende : cache, puis mise à jour en arrière-plan.
   if (url.origin === self.location.origin || /cdnjs\.cloudflare\.com|fonts\.(googleapis|gstatic)\.com/.test(url.hostname) || /\/legendes\//.test(url.pathname)) {

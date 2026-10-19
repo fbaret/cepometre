@@ -231,6 +231,7 @@ button { cursor: pointer; }
 .alert-box { border: 1px solid var(--accent); border-radius: 14px; padding: 8px 10px; }
 .alert-box .new { font: 600 10px/1 var(--font-mono); text-transform: uppercase; background: var(--accent); color: #fff; border-radius: 6px; padding: 2px 5px; margin-left: 4px; vertical-align: 2px; }
 .leaflet-top.leaflet-left { top: 236px; }
+.upd { display: block; margin-top: 4px; font: 10px/1.2 var(--font-mono); opacity: .6; }
 .commune { margin: 2px 0 0; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .share-btn { flex: none; display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 8px 10px; font-size: 11px; align-self: flex-start; }
 .big span { font: 11px/1 var(--font-mono); opacity: .85; margin-top: 4px; }
@@ -419,6 +420,13 @@ button { cursor: pointer; }
   <label class="toggle" for="tgPub">Forêts publiques uniquement <input type="checkbox" id="tgPub" checked></label>
   <p class="small muted" id="pubNote"></p>
   <p class="small muted" id="fineNote"></p>
+  <h3>Alerte autour de moi</h3>
+  <p class="small muted" id="alState">Un mail (et une notification ntfy) quand un jour de la semaine passe à 80 ou plus en forêt publique près de toi.</p>
+  <label class="small" for="alMail">Mail</label>
+  <input type="email" id="alMail" placeholder="toi@exemple.fr" autocomplete="email" style="width:100%;margin:4px 0 8px">
+  <label class="small" for="alRayon">Rayon</label>
+  <select id="alRayon" style="margin:4px 0 8px"><option value="10">10 km</option><option value="20" selected>20 km</option><option value="30">30 km</option><option value="50">50 km</option></select>
+  <div class="actions"><button type="button" class="btn primary" id="alSet">M'alerter autour de ma position</button><button type="button" class="btn ghost" id="alOff" hidden>Arrêter</button></div>
   <h3>Hors ligne</h3>
   <p class="small muted">Garde les cartes de la zone affichée (trois niveaux de zoom de plus) et sa météo, pour t'en servir en forêt sans réseau.</p>
   <button type="button" class="btn" id="saveZone">Garder cette zone</button>
@@ -1132,7 +1140,12 @@ button { cursor: pointer; }
       for (var q = 0; q <= 8; q++) { var v = t0 + (100 - t0) * q / 8, c = displayColor(v) || scoreColor(v); stops.push("rgba(" + c.arr.slice(0, 3).map(Math.round).join(",") + "," + Math.max(0.2, c.alpha).toFixed(2) + ") " + (q * 12.5) + "%"); }
       box.innerHTML = '<span class="cap">' + esc(SP().label) + " · " + t0 + ' → 100</span><div class="ramp" style="background:linear-gradient(90deg,' + stops.join(",") + ')"></div>';
     }
+    if (SRV && SRV.generated) box.innerHTML += '<span class="upd">Météo du ' + fmtStamp(SRV.generated) + "</span>";
     box.hidden = false;
+  }
+  function fmtStamp(iso) {
+    var d = new Date(iso); if (isNaN(d)) return "?";
+    return d.toLocaleDateString("fr-FR", { day: "numeric", month: "short" }) + " à " + d.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
   }
   function drawRects() {
     gridState.cells.forEach(function (p) {
@@ -1978,8 +1991,41 @@ button { cursor: pointer; }
   });
   map.on("moveend", function () { scheduleRefresh(); renderDays(); });
 
+  /* ---------- Alerte perso : position GPS + rayon + mail, envoyés à l'hébergement (api/alerte.php) ---------- */
+  var ALERT_TOKEN = "__ALERT_TOKEN__", ALERT_API = "api/alerte.php";
+  function alertReq(method, body) {
+    return fetch(ALERT_API, { method: method, headers: { "X-Token": ALERT_TOKEN, "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined, cache: "no-store" })
+      .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); });
+  }
+  function showAlertState(d) {
+    var on = d && d.lat;
+    $("#alState").textContent = on ? "Alerte active : " + d.rayon + " km autour de la position du " + fmtStamp(d.maj) + (d.email ? ", mail à " + d.email : ", sans mail (notification ntfy seulement)") + ". Vérifiée à chaque mise à jour de la météo."
+      : "Un mail (et une notification ntfy) quand un jour de la semaine passe à 80 ou plus en forêt publique près de toi.";
+    if (on) { if (d.email) $("#alMail").value = d.email; $("#alRayon").value = String(d.rayon); }
+    $("#alOff").hidden = !on;
+    $("#alSet").textContent = on ? "Mettre à jour avec ma position actuelle" : "M'alerter autour de ma position";
+  }
+  function loadAlertState() {
+    if (ALERT_TOKEN.indexOf("__") === 0) { $("#alState").textContent = "Alerte disponible seulement sur la version en ligne."; $("#alSet").disabled = true; return; }
+    alertReq("GET").then(showAlertState).catch(function () {});
+  }
+  $("#alSet").onclick = function () {
+    var btn = this, mail = $("#alMail").value.trim();
+    if (mail && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(mail)) { toast("Adresse mail invalide"); return; }
+    if (!navigator.geolocation) { toast("Position indisponible sur cet appareil"); return; }
+    btn.disabled = true; btn.textContent = "Position en cours…";
+    navigator.geolocation.getCurrentPosition(function (pos) {
+      alertReq("POST", { lat: pos.coords.latitude, lon: pos.coords.longitude, rayon: +$("#alRayon").value, email: mail })
+        .then(function (d) { showAlertState(d); toast("Alerte enregistrée"); })
+        .catch(function () { toast("Enregistrement impossible, réessaie plus tard"); showAlertState(null); })
+        .then(function () { btn.disabled = false; });
+    }, function () { btn.disabled = false; showAlertState(null); toast("Autorise la localisation pour régler l'alerte"); }, { enableHighAccuracy: false, timeout: 20000, maximumAge: 600000 });
+  };
+  $("#alOff").onclick = function () { alertReq("DELETE").then(function () { showAlertState(null); toast("Alerte arrêtée"); }).catch(function () { toast("Impossible pour l'instant"); }); };
+
   $("#btnLayers").onclick = function () {
     var p = $("#layers"); p.hidden = !p.hidden; this.setAttribute("aria-pressed", String(!p.hidden));
+    if (!p.hidden) loadAlertState();
     // Sur téléphone, on replie le volet du bas pour laisser la place aux réglages et voir la carte réagir.
     if (!p.hidden && window.innerWidth < 900) sheet.classList.remove("open");
   };
