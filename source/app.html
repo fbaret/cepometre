@@ -228,6 +228,9 @@ button { cursor: pointer; }
   color: #fff8f0;
 }
 .big b { font: 34px/1 var(--font-display); }
+.alert-box { border: 1px solid var(--accent); border-radius: 14px; padding: 8px 10px; }
+.alert-box .new { font: 600 10px/1 var(--font-mono); text-transform: uppercase; background: var(--accent); color: #fff; border-radius: 6px; padding: 2px 5px; margin-left: 4px; vertical-align: 2px; }
+.leaflet-top.leaflet-left { top: 236px; }
 .commune { margin: 2px 0 0; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .share-btn { flex: none; display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 8px 10px; font-size: 11px; align-self: flex-start; }
 .big span { font: 11px/1 var(--font-mono); opacity: .85; margin-top: 4px; }
@@ -567,6 +570,7 @@ button { cursor: pointer; }
 
   /* ---------- Carte ---------- */
   var map = L.map("map", { zoomControl: false, attributionControl: true, preferCanvas: true, tap: true }).setView(load("view", [43.22, -0.78]).slice(0, 2), load("view", [0, 0, 9])[2] || 9);
+  if (L.control && L.control.scale) L.control.scale({ imperial: false, position: "topleft", maxWidth: 110 }).addTo(map);
   map.attributionControl.setPrefix(false);
 
   function wmts(layer, fmt, tms, opts) {
@@ -1333,10 +1337,28 @@ button { cursor: pointer; }
   });
 
   /* ---------- Onglet Secteurs ---------- */
+  /* ---------- Alertes de la semaine (data/alertes.json, calculé par le serveur) ---------- */
+  var ALERTS = null;
+  function loadAlerts() {
+    return fetchWithTimeout("data/alertes.json", 15000).then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (a) { ALERTS = a; if (a) idb.put({ k: "srv:alerts", t: Date.now(), a: a }); })
+      .catch(function () { return idb.getMany(["srv:alerts"]).then(function (c) { ALERTS = c["srv:alerts"] ? c["srv:alerts"].a : null; }); });
+  }
+  function alertHTML() {
+    if (!ALERTS || !ALERTS.days || state.species !== "cepes") return "";
+    var seen = load("alertSeen", {}), out = [];
+    Object.keys(ALERTS.days).sort().forEach(function (d) {
+      var x = ALERTS.days[d]; if (d < TODAY || x.s < ALERTS.seuil) return;
+      out.push('<li><button type="button" class="row alert-row" data-d="' + d + '" data-lat="' + x.lat + '" data-lon="' + x.lon + '"><span class="pill" style="' + pillStyle(x.s) + '">' + x.s + '</span><span class="meta"><b>' + fmtDay(d, true) + (seen[d] ? "" : ' <span class="new">nouveau</span>') + "</b><span>" + esc((x.commune ? x.commune + " · " : "") + x.forest) + " · " + fmtNum(x.z, 0) + ' m</span></span><span class="chev" aria-hidden="true">›</span></button></li>');
+    });
+    if (!out.length) return "";
+    return '<div class="alert-box"><div class="label">Cette semaine : meilleurs jours à ' + ALERTS.seuil + ' ou plus (forêts publiques)</div><ul class="list">' + out.join("") + "</ul></div>";
+  }
   function renderZones() {
     var pane = $("#pane-zones"), parts = [];
     var dayLabel = state.sel === TODAY ? "aujourd'hui" : fmtDay(state.sel, true);
     parts.push('<div><h2>Où chercher des ' + esc(SP().short) + " " + esc(dayLabel) + ' ?</h2><p class="muted small">Indice météo de pousse sur la zone affichée' + (state.sel > TODAY ? ", d'après les prévisions" : "") + ". Touche la carte pour le détail d'un coin.</p></div>");
+    parts.push(alertHTML());
     if (gridState.error) parts.push('<div class="notice"><span>' + esc(gridState.error) + '</span><button type="button" id="retry">Réessayer</button></div>');
     if (gridState.tooWide) parts.push('<p class="notice">Zoome un peu pour afficher l\'indice' + (state.fine > 0 ? " en finesse « " + FINESSE[state.fine].label + " », ou passe en finesse Normale pour voir plus large" : "") + ".</p>");
     if (gridState.partial && !gridState.loading) parts.push('<p class="notice">Zone affichée très large : le centre est chargé, ' + gridState.partial + " points restent vides pour ménager le quota. Déplace la carte ou zoome pour les compléter.</p>");
@@ -1397,6 +1419,7 @@ button { cursor: pointer; }
     pane.querySelectorAll(".row").forEach(function (b) {
       b.addEventListener("click", function () {
         var lat = +b.dataset.lat, lon = +b.dataset.lon;
+        if (b.dataset.d) { var seen = load("alertSeen", {}); seen[b.dataset.d] = 1; store("alertSeen", seen); state.sel = b.dataset.d; }
         map.setView([lat, lon], Math.max(map.getZoom(), 13));
         openSpot(lat, lon);
       });
@@ -2031,7 +2054,7 @@ button { cursor: pointer; }
   renderOffline();
   ensurePersist(true);
   setStatus();
-  Promise.all([loadServer(), loadStatic(), loadPublic()]).then(function () { applyLayers(); refreshGrid(); });
+  Promise.all([loadServer(), loadStatic(), loadPublic(), loadAlerts()]).then(function () { applyLayers(); refreshGrid(); });
 
   if ("serviceWorker" in navigator && location.protocol === "https:") {
     navigator.serviceWorker.register("sw.js").catch(function () {});

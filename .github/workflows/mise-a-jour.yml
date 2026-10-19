@@ -1,15 +1,11 @@
 name: Mise à jour du Cèpomètre
 
-# Deux passages par jour : 06 h 40 et 18 h 40, heure de Paris en été (04 h 40 et 16 h 40 UTC),
-# plus un passage à chaque modification du code.
+# GitHub saute ou retarde souvent les horaires planifiés : on se réveille toutes les 2 heures,
+# et la météo n'est récupérée que si celle publiée a 10 heures ou plus (≈ 2 fois par jour).
+# Chaque modification du code republie l'appli avec la dernière météo.
 on:
   schedule:
-    - cron: "40 4 * * *"
-    - cron: "40 16 * * *"
-    # Rattrapages : GitHub saute parfois des passages planifiés. Ignorés si la météo a moins de 5 h.
-    - cron: "17 6 * * *"
-    - cron: "17 18 * * *"
-    - cron: "17 21 * * *"
+    - cron: "7 */2 * * *"
   workflow_dispatch:
   push:
     branches: [main]
@@ -19,7 +15,21 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  decider:
+    runs-on: ubuntu-latest
+    outputs:
+      go: ${{ steps.age.outputs.go }}
+    steps:
+      - id: age
+        run: |
+          if [ "${{ github.event_name }}" != "schedule" ]; then echo "go=1" >> "$GITHUB_OUTPUT"; exit 0; fi
+          G=$(curl -fsSL https://vestra.fr/cepometre/data/wx-raw.json | python3 -c 'import json,sys,datetime as d; g=json.load(sys.stdin)["generated"]; print(int((d.datetime.now(d.timezone.utc)-d.datetime.fromisoformat(g.replace("Z","+00:00"))).total_seconds()//3600))' || echo 99)
+          echo "Météo publiée il y a $G h"
+          if [ "$G" -ge 10 ]; then echo "go=1" >> "$GITHUB_OUTPUT"; else echo "go=0" >> "$GITHUB_OUTPUT"; fi
+
   publier:
+    needs: decider
+    if: needs.decider.outputs.go == '1'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -125,6 +135,13 @@ jobs:
           else echo "Grille forêts/relief absente : la carte restera en météo seule."; fi
           if [ -f public-cache/public.json ]; then cp public-cache/public.json public-cache/public.bin.gz site/data/
           else echo "Forêts publiques absentes : le filtre sera indisponible."; fi
+
+      - name: Alerte si un jour de la semaine passe à 80 ou plus
+        continue-on-error: true
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC || 'cepes-yxrsq4741' }}
+          PREV_URL: https://vestra.fr/cepometre/data/alertes.json
+        run: node scripts/alerte.mjs site/data
 
       - name: Diagnostic (altitude, forêt, points témoins)
         if: github.event_name != 'schedule'
